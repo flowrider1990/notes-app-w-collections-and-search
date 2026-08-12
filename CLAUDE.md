@@ -59,8 +59,14 @@ Four tables: `notes`, `collections`, `tags`, `note_tags`.
   the policy and the signed-in user before debugging the UI.
 - Primary keys are `uuid` defaulting to `gen_random_uuid()`. Timestamps are `timestamptz`.
 - `notes.updated_at` is maintained by a database trigger, not by application code.
-- Schema changes are made in the Supabase dashboard SQL editor. Write the SQL into
-  `docs/schema.sql` and ask the user to run it — you cannot click in the dashboard.
+- Schema changes go through a CLI migration: `npx supabase migration new <name>`, write the SQL,
+  then `npx supabase db push --linked`. Mirror the change into `docs/schema.sql`, which stays the
+  current-state reference for the whole schema. Write migrations idempotently — `add column if not
+  exists`, and guard `add constraint` with a `pg_constraint` check, since it has no such clause.
+- The dashboard SQL editor is the fallback when the CLI is unavailable. In that case write the SQL
+  into `docs/schema.sql` and ask the user to run it — you cannot click in the dashboard.
+- `supabase db dump` and `db diff` need Docker, which is not installed here. For read-only
+  inspection use `npx supabase inspect db table-stats --linked`, which connects directly.
 
 ## Error handling
 

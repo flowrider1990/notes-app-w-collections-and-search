@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { Badge } from "@/components/ui/badge";
+import { TagPill } from "@/components/notes/tag-pill";
 import type { Note } from "@/lib/db";
 
 /** A note as it appears in the sidebar: title, body excerpt, and its tags. */
@@ -21,9 +21,7 @@ export function NoteCard({ note }: { note: Note }) {
       {note.tags.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1">
           {note.tags.map((tag) => (
-            <Badge key={tag.id} variant="secondary">
-              {tag.name}
-            </Badge>
+            <TagPill key={tag.id} tag={tag} />
           ))}
         </div>
       ) : null}

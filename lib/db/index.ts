@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { pickTagColor } from "@/lib/tag-colors";
 
 /**
  * The single centralised data-access module: every Supabase query for notes,
@@ -16,6 +17,8 @@ import { createClient } from "@/lib/supabase/server";
 export type Tag = {
   id: string;
   name: string;
+  /** One of the palette names in `lib/tag-colors.ts`, enforced by a check constraint. */
+  color: string;
 };
 
 export type Collection = {
@@ -35,7 +38,7 @@ export type Note = {
 };
 
 const NOTE_COLUMNS =
-  "id, collection_id, title, body, created_at, updated_at, note_tags(tags(id, name))";
+  "id, collection_id, title, body, created_at, updated_at, note_tags(tags(id, name, color))";
 
 type NoteRow = Omit<Note, "tags"> & {
   note_tags: { tags: Tag | Tag[] | null }[] | null;
@@ -113,7 +116,7 @@ export async function getTags(): Promise<Tag[]> {
 
   const { data, error } = await supabase
     .from("tags")
-    .select("id, name")
+    .select("id, name, color")
     .order("name", { ascending: true });
 
   if (error) {
@@ -134,10 +137,43 @@ export async function createCollection(name: string): Promise<Collection> {
     .single();
 
   if (error) {
+    // Same unique (user_id, name) constraint as renameCollection.
+    if (error.code === "23505") {
+      throw new Error(`You already have a collection called "${name}".`);
+    }
     throw new Error(`Could not create collection "${name}": ${error.message}`);
   }
 
   return data as Collection;
+}
+
+/**
+ * Renames a collection.
+ *
+ * `collections` carries `unique (user_id, name)`, so renaming onto a name the
+ * user already has is a constraint violation. Postgres reports that as 23505,
+ * which is turned into a message a caller can show verbatim instead of a raw
+ * database string.
+ */
+export async function renameCollection(id: string, name: string): Promise<void> {
+  const supabase = await createClient();
+  const trimmed = name.trim();
+
+  if (!trimmed) {
+    throw new Error("A collection needs a name.");
+  }
+
+  const { error } = await supabase
+    .from("collections")
+    .update({ name: trimmed })
+    .eq("id", id);
+
+  if (error) {
+    if (error.code === "23505") {
+      throw new Error(`You already have a collection called "${trimmed}".`);
+    }
+    throw new Error(`Could not rename collection: ${error.message}`);
+  }
 }
 
 /** Moves a note into a collection, or out of every collection when null. */
@@ -185,9 +221,11 @@ export async function addTagToNote(noteId: string, name: string): Promise<void> 
   let tagId = existing?.id;
 
   if (!tagId) {
+    // The colour is chosen once, here, and then persisted — so the tag keeps the
+    // same colour everywhere it appears rather than being re-derived per render.
     const { data: created, error: insertError } = await supabase
       .from("tags")
-      .insert({ name: trimmed })
+      .insert({ name: trimmed, color: pickTagColor(trimmed) })
       .select("id")
       .single();
 

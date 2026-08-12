@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { X } from "lucide-react";
 
 import { addTagToNoteAction, removeTagFromNoteAction } from "@/app/notes/actions";
-import { Badge } from "@/components/ui/badge";
+import { TagPill } from "@/components/notes/tag-pill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Tag } from "@/lib/db";
@@ -48,18 +48,17 @@ export function TagEditor({ noteId, tags }: TagEditorProps) {
       ) : (
         <div className="flex flex-wrap gap-1">
           {tags.map((tag) => (
-            <Badge key={tag.id} variant="secondary" className="gap-1 pr-1">
-              {tag.name}
+            <TagPill key={tag.id} tag={tag} className="pr-1">
               <button
                 type="button"
                 onClick={() => removeTag(tag.id)}
                 disabled={pending}
                 aria-label={`Remove tag ${tag.name}`}
-                className="rounded hover:bg-background/40 disabled:opacity-50"
+                className="ml-1 rounded hover:bg-background/40 disabled:opacity-50"
               >
                 <X size={12} aria-hidden />
               </button>
-            </Badge>
+            </TagPill>
           ))}
         </div>
       )}

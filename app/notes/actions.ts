@@ -6,6 +6,7 @@ import {
   addTagToNote,
   createCollection,
   removeTagFromNote,
+  renameCollection,
   setNoteCollection,
 } from "@/lib/db";
 
@@ -25,12 +26,47 @@ function revalidateWorkspace() {
   revalidatePath(WORKSPACE_PATH, "layout");
 }
 
-export async function createCollectionAction(name: string) {
-  const trimmed = name.trim();
-  if (!trimmed) return;
+/**
+ * Naming a collection can fail on the `unique (user_id, name)` constraint, and a
+ * throw from a Server Action escalates to an error boundary — losing the whole
+ * sidebar over a typo. Both naming actions return the message instead so the
+ * caller can show it beside the input.
+ */
+export type ActionResult = { error: string | null };
 
-  await createCollection(trimmed);
+function failure(cause: unknown, fallback: string): ActionResult {
+  return { error: cause instanceof Error ? cause.message : fallback };
+}
+
+export async function createCollectionAction(name: string): Promise<ActionResult> {
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "A collection needs a name." };
+
+  try {
+    await createCollection(trimmed);
+  } catch (cause) {
+    return failure(cause, "Could not create collection.");
+  }
+
   revalidateWorkspace();
+  return { error: null };
+}
+
+export async function renameCollectionAction(
+  id: string,
+  name: string,
+): Promise<ActionResult> {
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "A collection needs a name." };
+
+  try {
+    await renameCollection(id, trimmed);
+  } catch (cause) {
+    return failure(cause, "Could not rename collection.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
 }
 
 export async function setNoteCollectionAction(

@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 export function NewCollection() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function submit() {
@@ -24,7 +25,16 @@ export function NewCollection() {
     if (!trimmed) return;
 
     startTransition(async () => {
-      await createCollectionAction(trimmed);
+      // `collections` is unique per (user_id, name), so a duplicate is a likely
+      // and recoverable outcome — shown inline rather than thrown.
+      const result = await createCollectionAction(trimmed);
+
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      setError(null);
       setName("");
       setOpen(false);
     });
@@ -62,10 +72,18 @@ export function NewCollection() {
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             setName("");
+            setError(null);
             setOpen(false);
           }
         }}
       />
+
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={pending || !name.trim()}>
           {pending ? "Adding…" : "Add"}
@@ -76,6 +94,7 @@ export function NewCollection() {
           size="sm"
           onClick={() => {
             setName("");
+            setError(null);
             setOpen(false);
           }}
         >

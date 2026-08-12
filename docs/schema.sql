@@ -16,10 +16,16 @@ create table if not exists public.collections (
   unique (user_id, name)
 );
 
+-- `color` is one of a small fixed palette, assigned by application code when the
+-- tag is first created. The check constraint keeps an unknown name out, since it
+-- would render as an unstyled pill rather than failing visibly.
+-- Added later by supabase/migrations/20260812111118_add_tag_color.sql.
 create table if not exists public.tags (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
   name        text not null,
+  color       text not null default 'slate'
+                check (color in ('slate', 'red', 'amber', 'green', 'blue', 'violet')),
   created_at  timestamptz not null default now(),
   unique (user_id, name)
 );

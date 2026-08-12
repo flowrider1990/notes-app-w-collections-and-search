@@ -5,7 +5,7 @@ import { Search } from "lucide-react";
 
 import { CollectionGroup } from "@/components/notes/collection-group";
 import { NewCollection } from "@/components/notes/new-collection";
-import { Badge } from "@/components/ui/badge";
+import { TagPill } from "@/components/notes/tag-pill";
 import { Input } from "@/components/ui/input";
 import type { Collection, Note, Tag } from "@/lib/db";
 
@@ -109,10 +109,9 @@ export function WorkspaceSidebar({
                   type="button"
                   onClick={() => toggleTag(tag.id)}
                   aria-pressed={selected}
+                  className="rounded-md"
                 >
-                  <Badge variant={selected ? "default" : "outline"}>
-                    {tag.name}
-                  </Badge>
+                  <TagPill tag={tag} selected={selected} />
                 </button>
               );
             })}
@@ -134,12 +133,19 @@ export function WorkspaceSidebar({
             const inCollection = filtered.filter(
               (note) => note.collection_id === collection.id,
             );
+            // Counted from the unfiltered set: the badge reports what the
+            // collection contains, not what survived the current filter.
+            const totalInCollection = notes.filter(
+              (note) => note.collection_id === collection.id,
+            ).length;
 
             return (
               <CollectionGroup
                 key={collection.id}
+                collectionId={collection.id}
                 name={collection.name}
                 notes={inCollection}
+                totalCount={totalInCollection}
                 emptyMessage={
                   filterActive
                     ? "No notes here match the current filter."
@@ -152,9 +158,14 @@ export function WorkspaceSidebar({
             );
           })}
 
+          {/* No collectionId: "Uncollected" is the collection_id-is-null bucket
+              rather than a row, so it offers no rename control. */}
           <CollectionGroup
             name="Uncollected"
             notes={uncollected}
+            totalCount={
+              notes.filter((note) => note.collection_id === null).length
+            }
             defaultExpanded
             emptyMessage={
               filterActive
