@@ -10,33 +10,54 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
 # next.js
 /.next/
 /out/
+next-env.d.ts
 
 # production
 /build
 
-# misc
-.DS_Store
-*.pem
+# testing
+/coverage
 
-# debug
+# environment — never commit these
+.env
+.env*.local
+
+# supabase local artifacts
+/supabase/.branches
+/supabase/.temp
+
+# debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*.local
-.env
-
-# vercel
-.vercel
-
 # typescript
 *.tsbuildinfo
-next-env.d.ts
+
+# certificates / keys
+*.pem
+
+# OS clutter
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# editor clutter
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# vercel (unused — no deployment step)
+.vercel
+
+# exercise scaffolding — local only, not part of the project
+AGENT-BRIEF.md
