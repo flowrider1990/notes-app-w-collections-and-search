@@ -21,8 +21,13 @@ npm run dev          # http://localhost:3000
 ```
 
 `.env.local` must exist before the dev server starts or the app throws on boot. It needs
-`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. There is no deployment step and no
-public URL.
+`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — the newer key name, whose
+value starts with `sb_publishable_` rather than being a legacy `eyJ…` anon JWT. There is no
+deployment step and no public URL.
+
+The Supabase CLI does **not** read `.env.local`; that file is a Next.js convention. The CLI takes its
+credentials from its own store (`supabase login`) or from `SUPABASE_ACCESS_TOKEN` in the process
+environment.
 
 For a programmatic correctness check use `npm run build` — it terminates and surfaces type and lint
 errors. Do **not** run `npm run dev` in a tool call; it never exits and will hang.
@@ -36,8 +41,10 @@ errors. Do **not** run `npm run dev` in a tool call; it never exits and will han
    function to the helper module and call that.
 4. **Never commit `.env.local`.** Run `git check-ignore -v .env.local` before committing; if it
    prints nothing, stop and fix `.gitignore`.
-5. **Only the anon key belongs in client-side environment variables.** If something needs the
-   service role key to work, the RLS policy is wrong — fix the policy.
+5. **Only the publishable key belongs in client-side environment variables.** If something needs the
+   secret or service role key to work, the RLS policy is wrong — fix the policy. A personal access
+   token (`sbp_…`) is account-wide, not project-scoped, and belongs in neither `.env.local` nor any
+   `NEXT_PUBLIC_` variable — a `NEXT_PUBLIC_` prefix would inline it into the browser bundle.
 
 ## Supabase conventions
 
@@ -59,3 +66,13 @@ Four tables: `notes`, `collections`, `tags`, `note_tags`.
 
 `supabase-js` returns `{ data, error }` and does not throw. Every call must check `error`. Handle it
 once inside the helper module rather than in each component.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
