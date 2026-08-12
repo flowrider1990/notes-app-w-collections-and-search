@@ -7,7 +7,9 @@ import {
   createCollection,
   removeTagFromNote,
   renameCollection,
+  setNoteArchived,
   setNoteCollection,
+  setNotePinned,
 } from "@/lib/db";
 
 /**
@@ -69,12 +71,63 @@ export async function renameCollectionAction(
   return { error: null };
 }
 
+/**
+ * Moves a note into a collection, or out of all of them with `null`.
+ *
+ * Returns its failure for the same reason the naming actions do: a note is also
+ * moved by dropping a card onto a collection in the sidebar, and a throw there
+ * would trade a failed move for the entire sidebar unmounting into an error
+ * boundary. `collection-picker.tsx` ignores the return value and is unaffected.
+ */
 export async function setNoteCollectionAction(
   noteId: string,
   collectionId: string | null,
-) {
-  await setNoteCollection(noteId, collectionId);
+): Promise<ActionResult> {
+  try {
+    await setNoteCollection(noteId, collectionId);
+  } catch (cause) {
+    return failure(cause, "Could not move the note.");
+  }
+
   revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Pins or unpins a note. Returns its failure rather than throwing, for the same
+ * reason as the actions above: the control sits on a sidebar card, and a throw
+ * would take the whole sidebar down with it.
+ */
+export async function setNotePinnedAction(
+  noteId: string,
+  pinned: boolean,
+): Promise<ActionResult> {
+  try {
+    await setNotePinned(noteId, pinned);
+  } catch (cause) {
+    return failure(cause, pinned ? "Could not pin the note." : "Could not unpin the note.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/** Archives a note, or restores it from the Archive when `archived` is false. */
+export async function setNoteArchivedAction(
+  noteId: string,
+  archived: boolean,
+): Promise<ActionResult> {
+  try {
+    await setNoteArchived(noteId, archived);
+  } catch (cause) {
+    return failure(
+      cause,
+      archived ? "Could not archive the note." : "Could not restore the note.",
+    );
+  }
+
+  revalidateWorkspace();
+  return { error: null };
 }
 
 export async function addTagToNoteAction(noteId: string, name: string) {

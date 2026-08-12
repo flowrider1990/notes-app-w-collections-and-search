@@ -32,13 +32,17 @@ export type Note = {
   collection_id: string | null;
   title: string;
   body: string;
+  /** Floats the note to the top of its collection, above the time ordering. */
+  pinned: boolean;
+  /** Hidden from the main sidebar view, but not deleted. */
+  archived: boolean;
   created_at: string;
   updated_at: string;
   tags: Tag[];
 };
 
 const NOTE_COLUMNS =
-  "id, collection_id, title, body, created_at, updated_at, note_tags(tags(id, name, color))";
+  "id, collection_id, title, body, pinned, archived, created_at, updated_at, note_tags(tags(id, name, color))";
 
 type NoteRow = Omit<Note, "tags"> & {
   note_tags: { tags: Tag | Tag[] | null }[] | null;
@@ -59,10 +63,20 @@ function toNote({ note_tags, ...note }: NoteRow): Note {
 }
 
 /**
- * Every note the signed-in user owns, newest first, each with its tags.
+ * Every note the signed-in user owns — pinned first, then newest first — each
+ * with its tags.
  *
  * Tags come from the same round trip rather than a query per note — a nested
  * select here is the difference between one statement and N+1.
+ *
+ * Ordering is done here rather than in the sidebar so there is one answer to
+ * "what order are notes in". Postgres sorts `false` before `true`, so
+ * `pinned desc` puts pinned notes on top; callers that filter this list keep the
+ * order, because `Array.prototype.filter` preserves it.
+ *
+ * Archived notes are included. The sidebar already holds every note in memory
+ * for search and tag filtering, so it splits them out there — a second query
+ * would buy nothing.
  */
 export async function getNotes(): Promise<Note[]> {
   const supabase = await createClient();
@@ -70,6 +84,7 @@ export async function getNotes(): Promise<Note[]> {
   const { data, error } = await supabase
     .from("notes")
     .select(NOTE_COLUMNS)
+    .order("pinned", { ascending: false })
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -191,6 +206,52 @@ export async function setNoteCollection(
 
   if (error) {
     throw new Error(`Could not move note: ${error.message}`);
+  }
+}
+
+/**
+ * Pins or unpins a note. Pinned notes sort above the rest of their collection —
+ * see the ordering in `getNotes`.
+ */
+export async function setNotePinned(
+  noteId: string,
+  pinned: boolean,
+): Promise<void> {
+  const supabase = await createClient();
+
+  // `updated_at` is maintained by a database trigger — never set it here. It
+  // does get bumped by this update, since the trigger fires on any UPDATE.
+  const { error } = await supabase
+    .from("notes")
+    .update({ pinned })
+    .eq("id", noteId);
+
+  if (error) {
+    throw new Error(`Could not ${pinned ? "pin" : "unpin"} note: ${error.message}`);
+  }
+}
+
+/**
+ * Archives or restores a note.
+ *
+ * Archiving is a flag, not a delete: the note keeps its id, its collection and
+ * its tags, so restoring it puts it back exactly where it was.
+ */
+export async function setNoteArchived(
+  noteId: string,
+  archived: boolean,
+): Promise<void> {
+  const supabase = await createClient();
+
+  // `updated_at` is maintained by a database trigger — never set it here.
+  const { error } = await supabase
+    .from("notes")
+    .update({ archived })
+    .eq("id", noteId);
+
+  if (error) {
+    const verb = archived ? "archive" : "restore";
+    throw new Error(`Could not ${verb} note: ${error.message}`);
   }
 }
 

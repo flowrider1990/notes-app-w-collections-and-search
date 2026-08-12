@@ -35,12 +35,20 @@ create table if not exists public.tags (
   unique (user_id, name)
 );
 
+-- `pinned` floats a note to the top of its collection, above the normal
+-- `created_at desc` order — the ordering itself lives in the query, not here.
+-- `archived` hides a note from the main sidebar view without deleting it: a flag
+-- rather than a second table, so the note keeps its id, collection and tags and
+-- restoring it is one boolean flip.
+-- Both added later by supabase/migrations/20260812122955_add_note_pinned_archived.sql.
 create table if not exists public.notes (
   id             uuid primary key default gen_random_uuid(),
   user_id        uuid not null default auth.uid() references auth.users(id) on delete cascade,
   collection_id  uuid references public.collections(id) on delete set null,
   title          text not null default '',
   body           text not null default '',
+  pinned         boolean not null default false,
+  archived       boolean not null default false,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
@@ -69,6 +77,11 @@ create index if not exists note_tags_tag_id_idx     on public.note_tags (tag_id)
 -- 3. updated_at trigger
 -- ============================================================
 -- Kept in the database so application code cannot forget it.
+--
+-- It fires on every UPDATE, not only on title/body: flipping `pinned` or
+-- `archived` bumps `updated_at` too, even though no text changed. Nothing sorts
+-- on or displays `updated_at`, so this is harmless — but do not read it as
+-- "last edited by hand".
 
 create or replace function public.set_updated_at()
 returns trigger

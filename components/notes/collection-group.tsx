@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type DragEvent } from "react";
 import { Check, ChevronDown, ChevronRight, Pencil, X } from "lucide-react";
 
-import { renameCollectionAction } from "@/app/notes/actions";
+import {
+  renameCollectionAction,
+  setNoteCollectionAction,
+} from "@/app/notes/actions";
 import { NoteCard } from "@/components/notes/note-card";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type { Note } from "@/lib/db";
+import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
 
 type CollectionGroupProps = {
   name: string;
@@ -23,6 +28,14 @@ type CollectionGroupProps = {
    * null` bucket rather than a row, so it has no id and cannot be renamed.
    */
   collectionId?: string;
+  /**
+   * Whether a dragged note can be dropped here to join this collection. The
+   * "Archive" section reuses this component and must set it false: it has no
+   * `collectionId`, which is exactly how "Uncollected" is expressed, so a drop
+   * would otherwise resolve to `null` and quietly move the note out of its
+   * collection instead of doing nothing.
+   */
+  droppable?: boolean;
   defaultExpanded?: boolean;
   /**
    * Forces the group open regardless of what the user last clicked. Set while a
@@ -33,7 +46,8 @@ type CollectionGroupProps = {
 };
 
 /**
- * An expandable collection in the sidebar, with inline rename.
+ * An expandable collection in the sidebar, with inline rename, and the drop
+ * target for moving a note into it.
  *
  * The header is a flex row rather than one big button: an edit control nested
  * inside a button would be invalid markup and unreachable by keyboard.
@@ -47,6 +61,7 @@ export function CollectionGroup({
   totalCount,
   emptyMessage,
   collectionId,
+  droppable = true,
   defaultExpanded = false,
   forceExpanded = false,
 }: CollectionGroupProps) {
@@ -55,9 +70,65 @@ export function CollectionGroup({
   const [draft, setDraft] = useState(name);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [dragOver, setDragOver] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
 
   const expanded = forceExpanded || open;
   const renameable = collectionId !== undefined;
+
+  /**
+   * The collection a dropped note lands in. `undefined` is the "Uncollected"
+   * group, which is the `collection_id is null` bucket rather than a row — so
+   * dropping there clears the note's collection.
+   */
+  const targetCollectionId = collectionId ?? null;
+
+  /**
+   * Whether a drag carries a note. Only the *presence* of the MIME type can be
+   * tested here: Firefox blocks `getData()` outside the `drop` event, so the
+   * note id itself is unreadable while the drag is still in flight.
+   */
+  function carriesNote(event: DragEvent<HTMLDivElement>) {
+    return event.dataTransfer.types.includes(NOTE_ID_MIME);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!carriesNote(event)) return;
+
+    // Without preventDefault the browser refuses the drop outright, and no
+    // `drop` event ever fires.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOver(true);
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>) {
+    // `dragleave` also fires when the pointer crosses into a child element,
+    // which would make the highlight flicker across every note card.
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDragOver(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    if (!carriesNote(event)) return;
+
+    event.preventDefault();
+    setDragOver(false);
+    setDropError(null);
+
+    const noteId = event.dataTransfer.getData(NOTE_ID_MIME);
+    if (!noteId) return;
+
+    // Empty string means the note was uncollected. Dropping a note back where
+    // it already is would write and revalidate for no change.
+    const origin = event.dataTransfer.getData(NOTE_COLLECTION_MIME) || null;
+    if (origin === targetCollectionId) return;
+
+    startTransition(async () => {
+      const result = await setNoteCollectionAction(noteId, targetCollectionId);
+      if (result.error) setDropError(result.error);
+    });
+  }
 
   function beginEdit() {
     setDraft(name);
@@ -141,7 +212,24 @@ export function CollectionGroup({
   }
 
   return (
-    <div>
+    // The whole group is the drop target, not just the header: a collapsed group
+    // shows nothing but its header, and an open one is easier to hit as a block.
+    <div
+      // Not attached at all when the group cannot accept notes, rather than
+      // guarded inside each handler: nothing can then fire by accident.
+      onDragOver={droppable ? onDragOver : undefined}
+      onDragLeave={droppable ? onDragLeave : undefined}
+      onDrop={droppable ? onDrop : undefined}
+      className={cn(
+        "rounded-md ring-2 ring-transparent transition-colors",
+        // Without this there is no way to tell which collection a note will land
+        // in, which makes the drag guesswork.
+        // Plain `bg-accent`, not `bg-accent/50`: the theme colours are declared
+        // as `hsl(var(--accent))` without an `<alpha-value>` placeholder, so an
+        // opacity modifier on them does not do what it looks like it does.
+        dragOver && "bg-accent ring-primary",
+      )}
+    >
       <div className="group flex items-center gap-1 rounded-md px-1 hover:bg-accent">
         <button
           type="button"
@@ -172,6 +260,12 @@ export function CollectionGroup({
           </button>
         ) : null}
       </div>
+
+      {dropError ? (
+        <p role="alert" className="px-1 text-xs text-destructive">
+          {dropError}
+        </p>
+      ) : null}
 
       {expanded ? (
         <div className="mt-1 flex flex-col gap-2 pl-2">

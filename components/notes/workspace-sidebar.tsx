@@ -16,8 +16,8 @@ type WorkspaceSidebarProps = {
 };
 
 /**
- * The workspace sidebar: search, tag filter, and collections as expandable
- * groups.
+ * The workspace sidebar: search, tag filter, collections as expandable groups,
+ * and an Archive section holding notes taken out of the main view.
  *
  * Notes arrive once as props from the layout, and both search and tag filtering
  * run here over that in-memory set. That is what makes results update as the
@@ -34,24 +34,42 @@ export function WorkspaceSidebar({
   const trimmedQuery = query.trim();
   const filterActive = trimmedQuery.length > 0 || selectedTagIds.length > 0;
 
-  const filtered = useMemo(() => {
-    const needle = trimmedQuery.toLowerCase();
+  /**
+   * `getNotes` returns archived notes too, so they are split out here rather than
+   * in a second query. The same filter runs over both halves: searching should
+   * find an archived note, since that is how you locate one to restore.
+   */
+  const { activeNotes, archivedNotes, filteredActive, filteredArchived } =
+    useMemo(() => {
+      const needle = trimmedQuery.toLowerCase();
 
-    return notes.filter((note) => {
-      // AND semantics: the note must carry *every* selected tag.
-      const carriesAllTags = selectedTagIds.every((tagId) =>
-        note.tags.some((tag) => tag.id === tagId),
-      );
-      if (!carriesAllTags) return false;
+      const matches = (note: Note) => {
+        // AND semantics: the note must carry *every* selected tag.
+        const carriesAllTags = selectedTagIds.every((tagId) =>
+          note.tags.some((tag) => tag.id === tagId),
+        );
+        if (!carriesAllTags) return false;
 
-      // Search composes with the tag filter rather than replacing it.
-      if (!needle) return true;
-      return (
-        note.title.toLowerCase().includes(needle) ||
-        note.body.toLowerCase().includes(needle)
-      );
-    });
-  }, [notes, trimmedQuery, selectedTagIds]);
+        // Search composes with the tag filter rather than replacing it.
+        if (!needle) return true;
+        return (
+          note.title.toLowerCase().includes(needle) ||
+          note.body.toLowerCase().includes(needle)
+        );
+      };
+
+      const active = notes.filter((note) => !note.archived);
+      const archived = notes.filter((note) => note.archived);
+
+      // `filter` preserves order, so the pinned-first ordering from `getNotes`
+      // survives every one of these passes.
+      return {
+        activeNotes: active,
+        archivedNotes: archived,
+        filteredActive: active.filter(matches),
+        filteredArchived: archived.filter(matches),
+      };
+    }, [notes, trimmedQuery, selectedTagIds]);
 
   function toggleTag(tagId: string) {
     setSelectedTagIds((current) =>
@@ -71,7 +89,7 @@ export function WorkspaceSidebar({
     return "No notes carry all of the selected tags.";
   }
 
-  const uncollected = filtered.filter((note) => note.collection_id === null);
+  const uncollected = filteredActive.filter((note) => note.collection_id === null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -121,21 +139,24 @@ export function WorkspaceSidebar({
 
       <NewCollection />
 
-      {notes.length === 0 ? (
+      {activeNotes.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No notes yet. Nothing to show here.
+          {archivedNotes.length > 0
+            ? "Every note is archived. Restore one from the Archive below."
+            : "No notes yet. Nothing to show here."}
         </p>
-      ) : filterActive && filtered.length === 0 ? (
+      ) : filterActive && filteredActive.length === 0 ? (
         <p className="text-sm text-muted-foreground">{noResultsMessage()}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {collections.map((collection) => {
-            const inCollection = filtered.filter(
+            const inCollection = filteredActive.filter(
               (note) => note.collection_id === collection.id,
             );
-            // Counted from the unfiltered set: the badge reports what the
-            // collection contains, not what survived the current filter.
-            const totalInCollection = notes.filter(
+            // Counted from the unfiltered set, minus archived notes: the badge
+            // reports what the collection holds in the main view, not what
+            // survived the current filter.
+            const totalInCollection = activeNotes.filter(
               (note) => note.collection_id === collection.id,
             ).length;
 
@@ -164,7 +185,7 @@ export function WorkspaceSidebar({
             name="Uncollected"
             notes={uncollected}
             totalCount={
-              notes.filter((note) => note.collection_id === null).length
+              activeNotes.filter((note) => note.collection_id === null).length
             }
             defaultExpanded
             emptyMessage={
@@ -176,6 +197,27 @@ export function WorkspaceSidebar({
           />
         </div>
       )}
+
+      {/* Outside the branches above on purpose. Both of them test the *active*
+          set, so archiving every note would otherwise leave the sidebar saying
+          there is nothing to show and render no Archive — stranding the notes
+          with no way to restore them.
+
+          `droppable={false}` because Archive has no collectionId, which is how
+          "Uncollected" is expressed: a drop here would resolve to null and move
+          the note out of its collection rather than archiving it. */}
+      <CollectionGroup
+        name="Archive"
+        notes={filteredArchived}
+        totalCount={archivedNotes.length}
+        droppable={false}
+        emptyMessage={
+          filterActive
+            ? "No archived notes match the current filter."
+            : "Nothing archived."
+        }
+        forceExpanded={filterActive && filteredArchived.length > 0}
+      />
     </div>
   );
 }
