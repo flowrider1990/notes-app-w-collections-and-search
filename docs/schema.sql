@@ -20,6 +20,11 @@ create table if not exists public.collections (
 -- tag is first created. The check constraint keeps an unknown name out, since it
 -- would render as an unstyled pill rather than failing visibly.
 -- Added later by supabase/migrations/20260812111118_add_tag_color.sql.
+--
+-- KEEP IN SYNC with TAG_COLORS in lib/tag-colors.ts. The list lives in both
+-- places and nothing enforces the pairing: adding a colour there without a
+-- migration here makes tag creation fail at runtime on 23514, which surfaces
+-- only as "Could not create tag".
 create table if not exists public.tags (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
