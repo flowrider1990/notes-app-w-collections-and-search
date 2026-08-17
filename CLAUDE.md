@@ -131,6 +131,19 @@ Storage bucket, `note-images`.
 - **RLS is enabled on every table** and every table has owner-scoped policies. A query returning
   `[]` with `error: null` usually means a policy did not match, not that the table is empty — check
   the policy and the signed-in user before debugging the UI.
+- **Every write that targets one row by id reads that id back.** It ends with `.select("id")` and
+  passes the result to `assertWriteHit()` in `lib/db/index.ts`. This follows from the point above: a
+  write to a row the caller cannot see returns zero rows and `error: null`, so without the read-back
+  a stale id reports success and changes nothing. Adding such a write without the guard reintroduces
+  the most misleading failure this layer can produce.
+
+  Three deletes skip it on purpose, and each says so in place: `removeTagFromNote`,
+  `removeSearchHistoryEntry` and `clearSearchHistory`. Removing something already gone is the state
+  the caller wanted, so guarding those would turn an impatient double-click into an error about a
+  state the user was trying to reach.
+- **Tag names are case-folded.** One tag per name per user regardless of case, enforced both by
+  `addTagToNote` and by a unique index on `(user_id, lower(name))`. Otherwise "work" and "Work"
+  become two pills that look identical, draw the same colour, and filter to disjoint sets of notes.
 - Primary keys are `uuid` defaulting to `gen_random_uuid()`. Timestamps are `timestamptz`.
 - `notes.updated_at` is maintained by a database trigger, not by application code. The trigger fires
   on every `UPDATE`, so flipping `pinned` or `archived` bumps it too — do not read it as "last

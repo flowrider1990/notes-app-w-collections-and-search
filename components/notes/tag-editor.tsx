@@ -18,21 +18,35 @@ type TagEditorProps = {
 /** Add and remove the open note's tags. Typing an existing name reuses that tag. */
 export function TagEditor({ noteId, tags }: TagEditorProps) {
   const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function addTag() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
+    setError(null);
+
     startTransition(async () => {
-      await addTagToNoteAction(noteId, trimmed);
+      const result = await addTagToNoteAction(noteId, trimmed);
+
+      if (result.error) {
+        // The typed name stays in the box, so a failure can be retried rather than
+        // retyped. Clearing it on failure would look like the tag was added.
+        setError(result.error);
+        return;
+      }
+
       setName("");
     });
   }
 
   function removeTag(tagId: string) {
+    setError(null);
+
     startTransition(async () => {
-      await removeTagFromNoteAction(noteId, tagId);
+      const result = await removeTagFromNoteAction(noteId, tagId);
+      if (result.error) setError(result.error);
     });
   }
 
@@ -80,6 +94,12 @@ export function TagEditor({ noteId, tags }: TagEditorProps) {
           {pending ? "Saving…" : "Add"}
         </Button>
       </form>
+
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

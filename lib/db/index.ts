@@ -125,6 +125,22 @@ type NoteRow = Omit<Note, "tags"> & {
 };
 
 /**
+ * Turns "the write matched no rows" into an error.
+ *
+ * Every update and delete here ends with `.select("id")` and passes the result
+ * through this. RLS makes a write to a row the caller cannot see look exactly like
+ * success — zero rows affected, `error: null` — so without reading back what was
+ * touched, a stale id from a sidebar rendered seconds ago reports "saved" and
+ * changes nothing. That is the single most misleading failure this data layer can
+ * produce, so nothing is allowed to skip it.
+ */
+function assertWriteHit(rows: unknown[] | null, subject: string): void {
+  if ((rows ?? []).length === 0) {
+    throw new Error(`Could not ${subject}: it no longer exists.`);
+  }
+}
+
+/**
  * Flattens the nested `note_tags(tags(...))` shape into a plain tag array.
  * The join row's `tags` arrives as an object or a single-element array
  * depending on how the relationship is inferred, so both are handled.
@@ -288,10 +304,11 @@ export async function renameCollection(id: string, name: string): Promise<void> 
     throw new Error("A collection needs a name.");
   }
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("collections")
     .update({ name: trimmed })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     if (error.code === "23505") {
@@ -299,6 +316,8 @@ export async function renameCollection(id: string, name: string): Promise<void> 
     }
     throw new Error(`Could not rename collection: ${error.message}`);
   }
+
+  assertWriteHit(data, "rename that collection");
 }
 
 /**
@@ -356,9 +375,7 @@ export async function updateNote(
     throw new Error(`Could not save note: ${error.message}`);
   }
 
-  if ((data ?? []).length === 0) {
-    throw new Error("Could not save note: it no longer exists.");
-  }
+  assertWriteHit(data, "save that note");
 }
 
 /**
@@ -395,9 +412,7 @@ export async function deleteNote(id: string): Promise<void> {
     throw new Error(`Could not delete note: ${error.message}`);
   }
 
-  if ((data ?? []).length === 0) {
-    throw new Error("Could not delete note: it no longer exists.");
-  }
+  assertWriteHit(data, "delete that note");
 
   if (paths.length > 0) {
     // Deliberately not fatal. The note is gone, which is what was asked; a failure
@@ -416,14 +431,17 @@ export async function setNoteCollection(
   const supabase = await createClient();
 
   // `updated_at` is maintained by a database trigger — never set it here.
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notes")
     .update({ collection_id: collectionId })
-    .eq("id", noteId);
+    .eq("id", noteId)
+    .select("id");
 
   if (error) {
     throw new Error(`Could not move note: ${error.message}`);
   }
+
+  assertWriteHit(data, "move that note");
 }
 
 /**
@@ -438,14 +456,17 @@ export async function setNotePinned(
 
   // `updated_at` is maintained by a database trigger — never set it here. It
   // does get bumped by this update, since the trigger fires on any UPDATE.
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notes")
     .update({ pinned })
-    .eq("id", noteId);
+    .eq("id", noteId)
+    .select("id");
 
   if (error) {
     throw new Error(`Could not ${pinned ? "pin" : "unpin"} note: ${error.message}`);
   }
+
+  assertWriteHit(data, pinned ? "pin that note" : "unpin that note");
 }
 
 /**
@@ -461,15 +482,19 @@ export async function setNoteArchived(
   const supabase = await createClient();
 
   // `updated_at` is maintained by a database trigger — never set it here.
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notes")
     .update({ archived })
-    .eq("id", noteId);
+    .eq("id", noteId)
+    .select("id");
+
+  const verb = archived ? "archive" : "restore";
 
   if (error) {
-    const verb = archived ? "archive" : "restore";
     throw new Error(`Could not ${verb} note: ${error.message}`);
   }
+
+  assertWriteHit(data, `${verb} that note`);
 }
 
 /**
@@ -479,6 +504,13 @@ export async function setNoteArchived(
  * rather than a new row: the tag is looked up first and only inserted when
  * genuinely new. The `note_tags` insert tolerates duplicates because its
  * composite primary key already makes a second identical link impossible.
+ *
+ * **Matching ignores case.** Typing "work" on one note and "Work" on another used to
+ * create two tags that looked identical, drew the same colour, and filtered to
+ * disjoint sets of notes — the filter panel showed two pills the user could not tell
+ * apart. The first spelling wins and later ones reuse it; a unique index on
+ * `(user_id, lower(name))` holds the same line in the database, so a second casing
+ * cannot arrive from anywhere else either.
  */
 export async function addTagToNote(noteId: string, name: string): Promise<void> {
   const supabase = await createClient();
@@ -486,15 +518,22 @@ export async function addTagToNote(noteId: string, name: string): Promise<void> 
 
   if (!trimmed) return;
 
-  const { data: existing, error: lookupError } = await supabase
+  // Every tag the user has, matched case-insensitively in JS rather than with
+  // `ilike`: a tag named "a_b" or "50%" would turn into a wildcard pattern there and
+  // match the wrong row. RLS already scopes this to one user's tags, and that list is
+  // small enough that the comparison costs nothing.
+  const { data: owned, error: lookupError } = await supabase
     .from("tags")
-    .select("id, name")
-    .eq("name", trimmed)
-    .maybeSingle();
+    .select("id, name");
 
   if (lookupError) {
     throw new Error(`Could not look up tag "${trimmed}": ${lookupError.message}`);
   }
+
+  const folded = trimmed.toLocaleLowerCase();
+  const existing = ((owned ?? []) as { id: string; name: string }[]).find(
+    (tag) => tag.name.toLocaleLowerCase() === folded,
+  );
 
   let tagId = existing?.id;
 
@@ -526,7 +565,15 @@ export async function addTagToNote(noteId: string, name: string): Promise<void> 
   }
 }
 
-/** Detaches a tag from a note. The tag itself is left in place. */
+/**
+ * Detaches a tag from a note. The tag itself is left in place.
+ *
+ * One of three writes here that deliberately skip `assertWriteHit`, because removing
+ * a link that is already gone is the same outcome the caller asked for. Guarding it
+ * would turn an impatient double-click into "that tag no longer exists" — an error
+ * about a state the user was trying to reach. The other two are the search-history
+ * deletes, for the same reason.
+ */
 export async function removeTagFromNote(
   noteId: string,
   tagId: string,
@@ -558,14 +605,20 @@ export async function shareCollection(id: string): Promise<string> {
   const supabase = await createClient();
   const token = crypto.randomUUID();
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("collections")
     .update({ share_token: token })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     throw new Error(`Could not share collection: ${error.message}`);
   }
+
+  // Read back before handing the token to the caller. Without this a write that
+  // matched nothing still returns a token, and the user copies a link that exists
+  // nowhere in the database — a share that looks like it worked and 404s forever.
+  assertWriteHit(data, "share that collection");
 
   return token;
 }
@@ -574,14 +627,17 @@ export async function shareCollection(id: string): Promise<string> {
 export async function unshareCollection(id: string): Promise<void> {
   const supabase = await createClient();
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("collections")
     .update({ share_token: null })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     throw new Error(`Could not stop sharing collection: ${error.message}`);
   }
+
+  assertWriteHit(data, "stop sharing that collection");
 }
 
 /**

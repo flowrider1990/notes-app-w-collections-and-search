@@ -54,8 +54,14 @@ export function NoteCard({ note }: { note: Note }) {
 
   return (
     <div
-      draggable
-      onDragStart={onDragStart}
+      // Archived notes are not draggable. Dropping one on a collection did move it,
+      // but `archived` stayed set, so it never appeared in the group it was dropped
+      // on — the drag succeeded and looked like it had failed. This mirrors the
+      // Archive section's own `droppable={false}`: restore the note first, then move
+      // it. A non-draggable card gives no drag ghost at all, which reads as "not
+      // this" rather than as a silent no-op.
+      draggable={!note.archived}
+      onDragStart={note.archived ? undefined : onDragStart}
       className="group rounded-lg border bg-card p-3.5 transition-colors duration-150 hover:border-foreground/15 hover:bg-accent"
     >
       <div className="flex items-start gap-1">
