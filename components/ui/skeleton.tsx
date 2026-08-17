@@ -21,7 +21,10 @@ export function Skeleton({
     <div
       aria-hidden="true"
       className={cn(
-        "animate-pulse rounded-md bg-muted motion-reduce:animate-none",
+        // A tint of the foreground rather than `bg-muted`, so the blocks keep the
+        // same contrast on the paper-white main pane and on the tinted sidebar —
+        // muted-on-muted would all but disappear.
+        "animate-pulse rounded-md bg-foreground/[0.08] motion-reduce:animate-none",
         className,
       )}
       {...props}

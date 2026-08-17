@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
 
 /**
  * Stands in for `WorkspaceSidebar` while the workspace loads.
@@ -13,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
  */
 export function WorkspaceSkeleton() {
   return (
-    <div role="status" aria-busy="true" className="flex flex-col gap-4">
+    <div role="status" aria-busy="true" className="flex flex-col gap-7">
       <span className="sr-only">Loading workspace…</span>
 
       {/* Search box */}
@@ -21,9 +22,7 @@ export function WorkspaceSkeleton() {
 
       {/* Tag filter */}
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">
-          Tags
-        </p>
+        <SectionLabel>Tags</SectionLabel>
         <div className="flex flex-wrap gap-1">
           <Skeleton className="h-6 w-16 rounded-full" />
           <Skeleton className="h-6 w-20 rounded-full" />
@@ -61,7 +60,7 @@ function CollectionGroupSkeleton({ cards = 0 }: { cards?: number }) {
         <div className="flex flex-col gap-2 pl-2">
           {Array.from({ length: cards }, (_, index) => (
             // Height matches a NoteCard with a title and a two-line excerpt.
-            <Skeleton key={index} className="h-[76px] w-full" />
+            <Skeleton key={index} className="h-[86px] w-full rounded-lg" />
           ))}
         </div>
       ) : null}

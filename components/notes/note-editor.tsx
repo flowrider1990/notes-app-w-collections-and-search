@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { updateNoteAction } from "@/app/notes/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Textarea } from "@/components/ui/textarea";
 
 type NoteEditorProps = {
@@ -88,23 +89,27 @@ export function NoteEditor({
         <label htmlFor="note-title" className="sr-only">
           Title
         </label>
+        {/* Borderless and unpadded: the title is the page's heading that happens to
+            be editable, so it should look like a heading rather than a form field. */}
         <Input
           id="note-title"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           placeholder="Untitled"
-          className="h-auto border-0 px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0 md:text-2xl"
+          className="h-auto border-0 px-0 py-0 text-3xl font-semibold tracking-tight shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0 md:text-3xl"
         />
 
         <label htmlFor="note-body" className="sr-only">
           Body
         </label>
+        {/* 15px on a 28px line: a reading measure for prose, not the tight rhythm
+            of a form control. */}
         <Textarea
           id="note-body"
           value={body}
           onChange={(event) => setBody(event.target.value)}
           placeholder="Write your note…"
-          className="min-h-[40vh] resize-y"
+          className="min-h-[45vh] resize-y px-4 py-3 text-[15px] leading-7 shadow-none"
         />
       </div>
 
@@ -118,9 +123,9 @@ export function NoteEditor({
             {pending ? "Saving…" : "Save"}
           </Button>
 
-          <p aria-live="polite" className="text-sm text-muted-foreground">
-            {status()}
-          </p>
+          {/* Same mono treatment as the section labels: this is the app reporting
+              on the note, not part of the note. */}
+          <SectionLabel aria-live="polite">{status()}</SectionLabel>
         </div>
 
         {error ? (

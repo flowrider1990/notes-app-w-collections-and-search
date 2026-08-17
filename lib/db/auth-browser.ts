@@ -41,6 +41,32 @@ export async function signInWithPassword(
 }
 
 /**
+ * Creates an account and asks Supabase to send a confirmation email.
+ *
+ * The link in that email must land on `/auth/confirm`, not on the workspace. The
+ * email carries a `token_hash` that only means something to `verifyOtp`, and that
+ * call lives in the confirm route handler — point the link straight at `/notes`
+ * and the visitor arrives with no session at all, confirmed but signed out, and
+ * gets bounced to the login page.
+ */
+export async function signUp(email: string, password: string): Promise<void> {
+  const supabase = createClient();
+
+  const confirm = new URL("/auth/confirm", window.location.origin);
+  confirm.searchParams.set("next", AFTER_SIGN_IN_PATH);
+
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: confirm.toString() },
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
  * Hands the browser to Google's consent screen, asking Supabase to send the user
  * back to `/auth/callback` afterwards.
  *

@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/section-label";
 
 /**
  * Stands in for a shared collection while it loads.
@@ -15,22 +16,23 @@ export function SharedCollectionSkeleton() {
     <div
       role="status"
       aria-busy="true"
-      className="mx-auto flex max-w-2xl flex-col gap-6 p-6"
+      className="mx-auto flex max-w-2xl flex-col gap-10 px-6 py-14"
     >
       <span className="sr-only">Loading shared collection…</span>
 
-      <div className="flex flex-col gap-2 border-b pb-4">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">
-          Shared collection
-        </p>
+      <div className="flex flex-col gap-2 border-b pb-6">
+        <SectionLabel>Shared collection</SectionLabel>
         {/* Collection name, then the note count line. */}
-        <Skeleton className="h-8 w-1/2" />
-        <Skeleton className="h-4 w-16" />
+        <Skeleton className="h-9 w-1/2" />
+        <Skeleton className="h-3 w-16" />
       </div>
 
       <div className="flex flex-col gap-4">
         {[0, 1].map((index) => (
-          <div key={index} className="flex flex-col gap-2 rounded-md border p-4">
+          <div
+            key={index}
+            className="flex flex-col gap-2.5 rounded-lg border bg-card p-5"
+          >
             <Skeleton className="h-5 w-1/3" />
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-4/5" />

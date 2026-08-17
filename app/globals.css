@@ -2,59 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Ink on paper.
+ *
+ * Every neutral carries the same cool cast — hue 220–222 at low saturation —
+ * rather than the pure `0 0% x` grey the starter shipped with. Pure grey is the
+ * absence of a decision; a consistent hue makes the surfaces feel like one
+ * material.
+ *
+ * Exactly one chromatic token: `--ring`. It is the focus colour and the selection
+ * colour, and nothing else in the chrome is allowed to be coloured. Tag pills are
+ * the deliberate exception — their colour is data the user chose, not decoration.
+ */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --radius: 0.5rem;
+    /* Paper, and the ink on it. */
+    --background: 220 33% 99%;
+    --foreground: 222 24% 11%;
+
+    /* Cards sit a shade above the paper. */
+    --card: 220 33% 100%;
+    --card-foreground: 222 24% 11%;
+    --popover: 220 33% 100%;
+    --popover-foreground: 222 24% 11%;
+
+    /* Primary is ink, not black: buttons belong to the same material as the text. */
+    --primary: 222 26% 13%;
+    --primary-foreground: 220 33% 99%;
+
+    --secondary: 220 20% 96%;
+    --secondary-foreground: 222 26% 13%;
+
+    --muted: 220 20% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    /* The hover surface. Every interactive row lands here and nowhere else. */
+    --accent: 220 22% 95%;
+    --accent-foreground: 222 26% 13%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 220 33% 99%;
+
+    /* Inputs read slightly stronger than dividers, so a field looks like a field. */
+    --border: 220 16% 90%;
+    --input: 220 16% 88%;
+
+    /* The one colour. */
+    --ring: 222 65% 52%;
+
+    --radius: 0.625rem;
   }
+
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --background: 222 24% 7%;
+    --foreground: 220 18% 94%;
+
+    --card: 222 22% 9%;
+    --card-foreground: 220 18% 94%;
+    --popover: 222 22% 9%;
+    --popover-foreground: 220 18% 94%;
+
+    --primary: 220 18% 94%;
+    --primary-foreground: 222 26% 10%;
+
+    --secondary: 222 16% 15%;
+    --secondary-foreground: 220 18% 94%;
+
+    --muted: 222 16% 14%;
+    --muted-foreground: 220 11% 63%;
+
+    --accent: 222 16% 16%;
+    --accent-foreground: 220 18% 94%;
+
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 220 18% 96%;
+
+    --border: 222 14% 17%;
+    --input: 222 14% 20%;
+
+    --ring: 222 70% 62%;
   }
 }
 
@@ -62,7 +89,21 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Headings break across lines evenly instead of leaving one orphaned word. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  /* Selected text picks up the accent hue — the only colour that appears in the
+     interface without the user asking for it. */
+  ::selection {
+    @apply bg-ring/20;
   }
 }

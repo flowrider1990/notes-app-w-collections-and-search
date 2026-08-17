@@ -7,6 +7,7 @@ import { addTagToNoteAction, removeTagFromNoteAction } from "@/app/notes/actions
 import { TagPill } from "@/components/notes/tag-pill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SectionLabel } from "@/components/ui/section-label";
 import type { Tag } from "@/lib/db";
 
 type TagEditorProps = {
@@ -37,9 +38,7 @@ export function TagEditor({ noteId, tags }: TagEditorProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs font-semibold uppercase text-muted-foreground">
-        Tags
-      </p>
+      <SectionLabel>Tags</SectionLabel>
 
       {tags.length === 0 ? (
         <p className="text-sm text-muted-foreground">

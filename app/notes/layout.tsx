@@ -54,24 +54,27 @@ export default function NotesLayout({
 
           No link back to the landing page: it redirects a signed-in visitor here,
           so the trip would end where it started. */}
-      <aside className="sticky top-0 flex h-svh w-80 shrink-0 flex-col border-r">
-        <div className="border-b p-4">
-          <p className="font-semibold">Notes</p>
-        </div>
+      {/* Tinted a shade off the paper so the two panes read as separate surfaces
+          without a heavy divider. Header and footer are both h-14, which gives the
+          column a fixed frame and lets the list between them scroll on its own. */}
+      <aside className="sticky top-0 flex h-svh w-80 shrink-0 flex-col border-r bg-muted/40">
+        <header className="flex h-14 shrink-0 items-center border-b px-5">
+          <p className="font-semibold tracking-tight">Notes</p>
+        </header>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto px-5 py-6">
           <Suspense fallback={<WorkspaceSkeleton />}>
             <Workspace />
           </Suspense>
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t p-3">
+        <footer className="flex h-14 shrink-0 items-center justify-between border-t px-3">
           <ThemeSwitcher />
           <LogoutButton />
-        </div>
+        </footer>
       </aside>
 
-      <main className="flex-1 p-6">{children}</main>
+      <main className="flex-1 px-6 py-10 md:px-10 md:py-14">{children}</main>
     </div>
   );
 }

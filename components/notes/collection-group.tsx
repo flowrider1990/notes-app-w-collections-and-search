@@ -230,29 +230,30 @@ export function CollectionGroup({
       className={cn(
         "rounded-md ring-2 ring-transparent transition-colors",
         // Without this there is no way to tell which collection a note will land
-        // in, which makes the drag guesswork.
-        // Plain `bg-accent`, not `bg-accent/50`: the theme colours are declared
-        // as `hsl(var(--accent))` without an `<alpha-value>` placeholder, so an
-        // opacity modifier on them does not do what it looks like it does.
+        // in, which makes the drag guesswork. Full `bg-accent` rather than a
+        // fraction of it: a drop target has to be unmistakable, and this is the
+        // one hover-weight surface in the app that should shout.
         dragOver && "bg-accent ring-primary",
       )}
     >
-      <div className="group flex items-center gap-1 rounded-md px-1 hover:bg-accent">
+      <div className="group flex items-center gap-1 rounded-md px-1.5 transition-colors duration-150 hover:bg-accent">
         <button
           type="button"
           onClick={() => setOpen(!open)}
           aria-expanded={expanded}
-          className="flex flex-1 items-center gap-1 py-1.5 text-left text-sm font-semibold"
+          className="flex flex-1 items-center gap-1.5 py-2 text-left text-sm font-medium"
         >
           {expanded ? (
-            <ChevronDown size={16} aria-hidden />
+            <ChevronDown size={15} aria-hidden className="text-muted-foreground" />
           ) : (
-            <ChevronRight size={16} aria-hidden />
+            <ChevronRight size={15} aria-hidden className="text-muted-foreground" />
           )}
-          <span className="flex-1">{name}</span>
+          <span className="flex-1 truncate">{name}</span>
         </button>
 
-        <span className="text-xs font-normal text-muted-foreground">
+        {/* Mono and tabular: counts are instrumentation, and they should not shift
+            the controls beside them when 9 becomes 10. */}
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {totalCount}
         </span>
 

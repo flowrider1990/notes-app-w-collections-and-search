@@ -61,6 +61,10 @@ const NOTE_COLUMNS =
 
 const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 
+/** Guards the one query whose argument comes from a URL rather than from a row. */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type NoteRow = Omit<Note, "tags"> & {
   note_tags: { tags: Tag | Tag[] | null }[] | null;
 };
@@ -523,6 +527,12 @@ export async function unshareCollection(id: string): Promise<void> {
 export async function getSharedCollection(
   token: string,
 ): Promise<SharedCollection | null> {
+  // The token arrives straight from the URL, and the function's parameter is a
+  // uuid: anything else makes Postgres raise 22P02, which would surface as a 500
+  // where the route means to render a 404. A malformed token is not a different
+  // kind of failure from an unknown one — nobody holds a link like that either.
+  if (!UUID_PATTERN.test(token)) return null;
+
   const supabase = await createClient();
 
   const { data, error } = await supabase.rpc("shared_collection", { token });

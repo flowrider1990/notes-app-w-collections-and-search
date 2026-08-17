@@ -1,8 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
-import { createClient } from "@/lib/supabase/client";
+import { signUp } from "@/lib/db/auth-browser";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,7 +29,6 @@ export function SignUpForm({
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    const supabase = createClient();
     setIsLoading(true);
     setError(null);
 
@@ -41,16 +39,7 @@ export function SignUpForm({
     }
 
     try {
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          // Where the confirmation link in the email leads. Same destination as
-          // every other way in, so it cannot drift from the sign-in forms.
-          emailRedirectTo: `${window.location.origin}${AFTER_SIGN_IN_PATH}`,
-        },
-      });
-      if (error) throw error;
+      await signUp(email, password);
       router.push("/auth/sign-up-success");
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
