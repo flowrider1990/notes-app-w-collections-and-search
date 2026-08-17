@@ -42,6 +42,22 @@ export type SearchHistoryEntry = {
   searched_at: string;
 };
 
+/** One image attached to a note. The bytes live in Storage, never in Postgres. */
+export type NoteImage = {
+  id: string;
+  /** Location inside the `note-images` bucket: `{user_id}/{note_id}/{uuid}.{ext}`. */
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+};
+
+/**
+ * A note image with a URL that can actually render it. The bucket is private, so
+ * the URL is signed and short-lived — see `SIGNED_URL_TTL_SECONDS`.
+ */
+export type SignedNoteImage = NoteImage & { url: string };
+
 export type Note = {
   id: string;
   collection_id: string | null;
@@ -64,6 +80,45 @@ const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 /** Guards the one query whose argument comes from a URL rather than from a row. */
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The private bucket holding note attachments. */
+const IMAGE_BUCKET = "note-images";
+
+/**
+ * How long a signed image URL stays valid. Long enough to read a note and come
+ * back to it, short enough that a URL copied out of the page stops working — which
+ * is the point of a private bucket.
+ */
+const SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+const NOTE_IMAGE_COLUMNS = "id, storage_path, mime_type, size_bytes, created_at";
+
+/**
+ * What may be attached, and how large. The bucket enforces both server-side; these
+ * are here so the app can refuse a file without a round trip, and so the error the
+ * user sees names the actual limit.
+ */
+const ALLOWED_IMAGE_TYPES: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+/**
+ * Looks up the extension for a MIME type, or null if it is not allowed.
+ *
+ * `Object.hasOwn` rather than a bare index: the type comes off an uploaded file, and
+ * a plain lookup answers for inherited members too, so `Content-Type: toString` would
+ * resolve to a function and read as permitted.
+ */
+function imageExtension(mimeType: string): string | null {
+  return Object.hasOwn(ALLOWED_IMAGE_TYPES, mimeType)
+    ? ALLOWED_IMAGE_TYPES[mimeType]
+    : null;
+}
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type NoteRow = Omit<Note, "tags"> & {
   note_tags: { tags: Tag | Tag[] | null }[] | null;
@@ -309,15 +364,26 @@ export async function updateNote(
 /**
  * Deletes a note for good. `archived` is the reversible option; this is not.
  *
- * The note's `note_tags` rows go with it — that foreign key cascades — so a tag
- * is never left pointing at a note that is gone. The tags themselves survive,
- * since they belong to the user rather than to one note.
+ * The note's `note_tags` and `note_images` rows go with it — both foreign keys
+ * cascade — so nothing is left pointing at a note that is gone. The tags themselves
+ * survive, since they belong to the user rather than to one note.
+ *
+ * The image *files* have to be removed by hand, because Postgres cannot cascade into
+ * Storage. Order matters and there is no transaction spanning both: the paths are
+ * read first, the row is deleted, and only then are the files removed. Deleting the
+ * files first would risk destroying them and then failing to delete the note —
+ * irreversible loss with the note still sitting there. This way the worst case is
+ * orphaned objects: waste, not loss.
  *
  * Reads back the id for the same reason as `updateNote`: without it a delete that
  * matched nothing is indistinguishable from one that worked.
  */
 export async function deleteNote(id: string): Promise<void> {
   const supabase = await createClient();
+
+  // Read before the delete: the cascade takes these rows with it, and after that
+  // nothing knows which files belonged to this note.
+  const paths = await imagePathsForNote(id);
 
   const { data, error } = await supabase
     .from("notes")
@@ -331,6 +397,14 @@ export async function deleteNote(id: string): Promise<void> {
 
   if ((data ?? []).length === 0) {
     throw new Error("Could not delete note: it no longer exists.");
+  }
+
+  if (paths.length > 0) {
+    // Deliberately not fatal. The note is gone, which is what was asked; a failure
+    // here leaves unreachable files behind, and reporting that as "could not delete
+    // the note" would describe the wrong outcome to someone whose note has in fact
+    // been deleted. There is nothing they could do about it either way.
+    await supabase.storage.from(IMAGE_BUCKET).remove(paths);
   }
 }
 
@@ -641,4 +715,199 @@ export async function clearSearchHistory(): Promise<void> {
   if (error) {
     throw new Error(`Could not clear search history: ${error.message}`);
   }
+}
+
+/**
+ * A note's images, oldest first, each with a signed URL that can render it.
+ *
+ * Two steps rather than one, because the rows are in Postgres and the files are in
+ * Storage: select the rows RLS allows, then ask Storage to sign exactly those paths.
+ * The bucket is private, so an unsigned URL renders nothing — that is what keeps an
+ * attachment as private as the note holding it.
+ *
+ * A path that fails to sign is dropped rather than thrown: one missing file should
+ * cost that thumbnail, not the whole note page.
+ */
+export async function getNoteImages(noteId: string): Promise<SignedNoteImage[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("note_images")
+    .select(NOTE_IMAGE_COLUMNS)
+    .eq("note_id", noteId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Could not load note images: ${error.message}`);
+  }
+
+  const images = (data ?? []) as NoteImage[];
+  if (images.length === 0) return [];
+
+  const { data: signed, error: signError } = await supabase.storage
+    .from(IMAGE_BUCKET)
+    .createSignedUrls(
+      images.map((image) => image.storage_path),
+      SIGNED_URL_TTL_SECONDS,
+    );
+
+  if (signError) {
+    throw new Error(`Could not sign image URLs: ${signError.message}`);
+  }
+
+  // Paired by path, not by position. `createSignedUrls` answers in order today and
+  // reports per-path failures in each row's own `error` field, but pairing on the
+  // index would silently mis-align `id` with `url` if that ever stopped holding —
+  // and a mis-aligned URL means the delete button removes a different image than the
+  // one the user is looking at.
+  const urlByPath = new Map(
+    (signed ?? []).flatMap((row) =>
+      row.path && row.signedUrl ? [[row.path, row.signedUrl] as const] : [],
+    ),
+  );
+
+  return images.flatMap((image) => {
+    const url = urlByPath.get(image.storage_path);
+    return url ? [{ ...image, url }] : [];
+  });
+}
+
+/**
+ * Uploads an image and attaches it to a note.
+ *
+ * `userId` is passed in rather than looked up here: the caller is a Server Action
+ * that has already called `requireUser()`, and asking the Auth server twice for the
+ * same answer would be a wasted round trip. It is also what the object path is built
+ * from, and the storage policy checks that first path segment against `auth.uid()` —
+ * so a mismatched id fails in the database rather than uploading somewhere it should
+ * not.
+ *
+ * The row is written *after* the file lands. If that insert fails the object is
+ * removed again, because a file with no row is invisible to the app and impossible
+ * to clean up through it.
+ */
+export async function addNoteImage(
+  noteId: string,
+  userId: string,
+  file: File,
+): Promise<void> {
+  const extension = imageExtension(file.type);
+
+  if (!extension) {
+    throw new Error("Images must be PNG, JPEG, WebP or GIF.");
+  }
+
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error("Images must be 5 MB or smaller.");
+  }
+
+  if (file.size === 0) {
+    throw new Error("That file is empty.");
+  }
+
+  const supabase = await createClient();
+
+  // A fresh uuid rather than the uploaded filename: two photos called IMG_0001.jpg
+  // must not collide, and a name from the client has no business becoming a path.
+  const path = `${userId}/${noteId}/${crypto.randomUUID()}.${extension}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(IMAGE_BUCKET)
+    .upload(path, file, { contentType: file.type, upsert: false });
+
+  if (uploadError) {
+    throw new Error(`Could not upload image: ${uploadError.message}`);
+  }
+
+  const { error } = await supabase.from("note_images").insert({
+    note_id: noteId,
+    storage_path: path,
+    mime_type: file.type,
+    size_bytes: file.size,
+  });
+
+  if (error) {
+    // Nothing references the object now, so leaving it would strand it for good.
+    // If even the cleanup fails, say so in the same breath rather than reporting a
+    // tidy failure over an untidy one.
+    const { error: cleanupError } = await supabase.storage
+      .from(IMAGE_BUCKET)
+      .remove([path]);
+
+    if (cleanupError) {
+      throw new Error(
+        `Could not attach image: ${error.message}. The uploaded file could not be removed either — ${cleanupError.message}`,
+      );
+    }
+
+    throw new Error(`Could not attach image: ${error.message}`);
+  }
+}
+
+/**
+ * Detaches an image and deletes its file.
+ *
+ * The path is read back first — RLS scopes that select, so an id belonging to
+ * someone else finds nothing and the function stops before touching Storage.
+ */
+export async function deleteNoteImage(id: string): Promise<void> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("note_images")
+    .select("storage_path")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Could not find that image: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error("Could not delete image: it no longer exists.");
+  }
+
+  const path = (data as { storage_path: string }).storage_path;
+
+  // File first. A row with no file renders one broken thumbnail; a file with no row
+  // cannot be reached or removed by anything in the app.
+  const { error: storageError } = await supabase.storage
+    .from(IMAGE_BUCKET)
+    .remove([path]);
+
+  if (storageError) {
+    throw new Error(`Could not delete image file: ${storageError.message}`);
+  }
+
+  const { error: rowError } = await supabase
+    .from("note_images")
+    .delete()
+    .eq("id", id);
+
+  if (rowError) {
+    throw new Error(`Could not delete image: ${rowError.message}`);
+  }
+}
+
+/**
+ * The Storage paths of a note's images.
+ *
+ * Read by `deleteNote` before it deletes the row, because the `note_images` cascade
+ * takes that knowledge with it — a cascade Storage knows nothing about.
+ */
+async function imagePathsForNote(noteId: string): Promise<string[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("note_images")
+    .select("storage_path")
+    .eq("note_id", noteId);
+
+  if (error) {
+    throw new Error(`Could not list the note's images: ${error.message}`);
+  }
+
+  return (data ?? []).map(
+    (row) => (row as { storage_path: string }).storage_path,
+  );
 }
