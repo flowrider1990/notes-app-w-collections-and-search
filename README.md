@@ -1,109 +1,113 @@
-<a href="https://demo-nextjs-with-supabase.vercel.app/">
-  <img alt="Next.js and Supabase Starter Kit - the fastest way to build apps with Next.js and Supabase" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
-  <h1 align="center">Next.js and Supabase Starter Kit</h1>
-</a>
+# Notes
 
-<p align="center">
- The fastest way to build apps with Next.js and Supabase
-</p>
+A private, per-user notes workspace. Sign in, write notes, group them into collections, colour-code
+them with tags, and search the full text of everything you have written. Every note belongs to the
+account that created it and is invisible to every other account — enforced by the database, not by
+the app.
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="#deploy-to-vercel"><strong>Deploy to Vercel</strong></a> ·
-  <a href="#clone-and-run-locally"><strong>Clone and run locally</strong></a> ·
-  <a href="#feedback-and-issues"><strong>Feedback and issues</strong></a>
-  <a href="#more-supabase-examples"><strong>More Examples</strong></a>
-</p>
-<br/>
+Built with Next.js (App Router), TypeScript, Tailwind CSS and Supabase.
 
-## Features
+![The notes workspace running locally](docs/screenshot-workspace.png)
 
-- Works across the entire [Next.js](https://nextjs.org) stack
-  - App Router
-  - Pages Router
-  - Proxy
-  - Client
-  - Server
-  - It just works!
-- supabase-ssr. A package to configure Supabase Auth to use cookies
-- Password-based authentication block installed via the [Supabase UI Library](https://supabase.com/ui/docs/nextjs/password-based-auth)
-- Styling with [Tailwind CSS](https://tailwindcss.com)
-- Components with [shadcn/ui](https://ui.shadcn.com/)
-- Optional deployment with [Supabase Vercel Integration and Vercel deploy](#deploy-your-own)
-  - Environment variables automatically assigned to Vercel project
+## What it does
 
-## Demo
+- **Write** — a title and a plain-text body, saved by an explicit Save button, with an **Export .md**
+  button that downloads the note as a Markdown file.
+- **Organise** — notes belong to a collection (or none), carry any number of colour-coded tags, and
+  can be pinned to the top, archived out of the way, or dragged between collections.
+- **Find** — a search box that queries Postgres full-text search, so the database returns only
+  matching rows. Recent searches are remembered.
+- **Attach** — images upload to a private Supabase Storage bucket and render on the note when it is
+  reopened.
+- **Share** — a collection can be published as a read-only link that works without signing in. It is
+  the only anonymous read path in the app, and it is token-gated.
+- **Sign in** — email and password, Google, or GitHub. Self-service sign-up with email confirmation,
+  and a password-reset flow by email.
 
-You can view a fully working demo at [demo-nextjs-with-supabase.vercel.app](https://demo-nextjs-with-supabase.vercel.app/).
+## Run it locally
 
-## Deploy to Vercel
+You need Node.js and a Supabase project.
 
-Vercel deployment will guide you through creating a Supabase account and project.
+```bash
+npm install
+npm run dev          # http://localhost:3000
+```
 
-After installation of the Supabase integration, all relevant environment variables will be assigned to the project so the deployment is fully functioning.
+### Environment variables
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&project-name=nextjs-with-supabase&repository-name=nextjs-with-supabase&demo-title=nextjs-with-supabase&demo-description=This+starter+configures+Supabase+Auth+to+use+cookies%2C+making+the+user%27s+session+available+throughout+the+entire+Next.js+app+-+Client+Components%2C+Server+Components%2C+Route+Handlers%2C+Server+Actions+and+Middleware.&demo-url=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2F&external-id=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&demo-image=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2Fopengraph-image.png)
+Create **`.env.local`** in the repo root before starting the server — the app throws on boot without
+it:
 
-The above will also clone the Starter kit to your GitHub, you can clone that locally and develop locally.
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```
 
-If you wish to just develop locally and not deploy to Vercel, [follow the steps below](#clone-and-run-locally).
+Both values live in your Supabase dashboard under **Project Settings → API Keys**. Use the
+**publishable** key, whose value starts with `sb_publishable_`; the legacy `anon` JWT works too.
 
-## Clone and run locally
+Nothing else belongs in this file. If a feature seems to need the service-role or secret key, an RLS
+policy is wrong — fix the policy. `.env.local` is git-ignored and must stay that way.
 
-1. You'll first need a Supabase project which can be made [via the Supabase dashboard](https://database.new)
+### Supabase setup
 
-2. Create a Next.js app using the Supabase Starter template npx command
+1. **Schema.** Apply [`docs/schema.sql`](docs/schema.sql) — it is the current-state reference for
+   every table, index, policy, trigger and function, written to run top to bottom in the dashboard
+   SQL editor. Incremental changes live in [`supabase/migrations/`](supabase/migrations) and go out
+   with `npx supabase db push --linked`.
+2. **Redirect URLs.** Authentication → URL Configuration → add `http://localhost:3000/**`. Every
+   OAuth return and emailed auth link comes back to this origin; without the entry they land on the
+   Site URL instead and the flow dies quietly.
+3. **Email confirmation.** Authentication → Sign In / Providers → Email → turn **Confirm email** on,
+   so registration sends the confirmation mail the sign-up flow expects.
+4. **Providers.** Enable Google and GitHub under Sign In / Providers if you want the social buttons,
+   pointing each OAuth app's callback at Supabase's own `/auth/v1/callback`.
+5. **Test accounts.** Create them by hand in Authentication → Users, or register through
+   `/auth/sign-up`.
 
-   ```bash
-   npx create-next-app --example with-supabase with-supabase-app
-   ```
+### Verifying it works
 
-   ```bash
-   yarn create next-app --example with-supabase with-supabase-app
-   ```
+```
+sign in                     → land on /notes
+create a note, reload       → the note is still there
+sign out, open /notes       → redirected to sign-in
+sign in as a second account → none of the first account's notes are visible
+```
 
-   ```bash
-   pnpm create next-app --example with-supabase with-supabase-app
-   ```
+## How it is put together
 
-3. Use `cd` to change into the app's directory
+| Path | What lives there |
+| --- | --- |
+| `app/notes/` | The workspace: sidebar layout, note detail page, and every Server Action |
+| `lib/db/` | **All** database access. No component builds a Supabase client or holds a query |
+| `lib/supabase/` | The browser, server and proxy clients |
+| `docs/schema.sql` | Current-state schema: tables, RLS policies, functions, triggers |
+| `supabase/migrations/` | Incremental schema changes, applied through the Supabase CLI |
+| `CLAUDE.md` | The rules this codebase is built to, including the authentication rules |
 
-   ```bash
-   cd with-supabase-app
-   ```
+Two things worth knowing before reading the code:
 
-4. Rename `.env.example` to `.env.local` and update the following:
+**Row Level Security does the scoping.** Every table has owner-scoped policies, so no query in
+`lib/db/` filters by user — the database refuses other people's rows even if the application forgets
+to ask correctly. A consequence: an unauthorised read returns `[]` with `error: null`, which is why
+every page gate exists and every helper checks `error` explicitly.
 
-  ```env
-  NEXT_PUBLIC_SUPABASE_URL=[INSERT SUPABASE PROJECT URL]
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=[INSERT SUPABASE PROJECT API PUBLISHABLE OR ANON KEY]
-  ```
-  > [!NOTE]
-  > This example uses `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, which refers to Supabase's new **publishable** key format.
-  > Both legacy **anon** keys and new **publishable** keys can be used with this variable name during the transition period. Supabase's dashboard may show `NEXT_PUBLIC_SUPABASE_ANON_KEY`; its value can be used in this example.
-  > See the [full announcement](https://github.com/orgs/supabase/discussions/29260) for more information.
+**Sessions are verified by the Auth server.** `requireUser()` in `lib/db/auth.ts` calls
+`supabase.auth.getUser()`, which asks Supabase rather than inspecting a token the browser sent. Every
+signed-in-only page and every Server Action goes through it.
 
-  Both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` can be found in [your Supabase project's API settings](https://supabase.com/dashboard/project/_?showConnect=true)
+## Optional tasks delivered
 
-5. You can now run the Next.js local development server:
+Each was built on its own feature branch and merged through a pull request:
 
-   ```bash
-   npm run dev
-   ```
+| Task | Difficulty | PR |
+| --- | --- | --- |
+| Server-side search, and tags with a tag filter | Medium | [#2](../../pull/2) |
+| Loading states — skeletons instead of blank flashes | Easy | [#3](../../pull/3) |
+| Minimalist design pass | Easy | [#4](../../pull/4) |
+| Export a note to Markdown | Medium | [#5](../../pull/5) |
+| Image uploads to Supabase Storage | **Hard** | [#6](../../pull/6) |
+| Password-reset email flow, self-service sign-up, and GitHub social login | Medium / **Hard** | [#8](../../pull/8) |
 
-   The starter kit should now be running on [localhost:3000](http://localhost:3000/).
-
-6. This template comes with the default shadcn/ui style initialized. If you instead want other ui.shadcn styles, delete `components.json` and [re-install shadcn/ui](https://ui.shadcn.com/docs/installation/next)
-
-> Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
-
-## Feedback and issues
-
-Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).
-
-## More Supabase examples
-
-- [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
-- [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
-- [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+Design notes, trade-offs and the reasoning behind the persistence choice are in
+[`REFLECTION.md`](REFLECTION.md) and [`docs/decisions.md`](docs/decisions.md).

@@ -71,13 +71,18 @@ project is on.
 
 ```bash
 npm install
-npm run dev          # http://localhost:3001
+npm run dev          # http://localhost:3000
 ```
 
-The port is pinned to 3001 in the `dev` script because another application owns 3000 on this
-machine. Keep it pinned: Google sign-in returns to `/auth/callback` on whatever origin the dev
-server is serving, and that exact origin has to be in the project's redirect allow list. A port
-that drifts is a sign-in that stops working.
+The port is pinned to 3000 in the `dev` script, explicitly rather than by relying on Next's default.
+It matters more here than in most projects: OAuth and every emailed auth link come back to
+`/auth/callback` or `/auth/confirm` on whatever origin the dev server is serving, and that exact
+origin has to be in the project's Supabase redirect allow list. A port that drifts is a sign-in that
+stops working, with no error that says so.
+
+This used to be 3001, because another local project held 3000. If `npm run dev` fails with
+`EADDRINUSE`, that is what has come back — free the port rather than letting this app wander, since
+the brief and the README both name 3000.
 
 `.env.local` must exist before the dev server starts or the app throws on boot. It needs
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — the newer key name, whose
