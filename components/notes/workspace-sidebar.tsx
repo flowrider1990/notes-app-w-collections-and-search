@@ -59,6 +59,37 @@ export function WorkspaceSidebar({
   const trimmedQuery = query.trim();
   const filterActive = trimmedQuery.length > 0 || selectedTagIds.length > 0;
 
+  /**
+   * A fingerprint of everything the result list actually renders from.
+   *
+   * The search effect has to re-run when a mutation changes the notes, or pinning
+   * something mid-search would leave the visible results in their pre-mutation state.
+   * Depending on the `notes` array itself did that — but `revalidatePath` hands down a
+   * new array on *every* mutation, including ones that touch nothing on screen here.
+   * Recording a search is the worst case: pressing Enter writes to `search_history`,
+   * revalidates, and paid for a second identical full-text query.
+   *
+   * A string of the fields the cards read means an unrelated revalidation produces an
+   * identical value and no query at all, while a real change to any note still
+   * re-runs the search.
+   */
+  const notesFingerprint = useMemo(
+    () =>
+      notes
+        .map((note) =>
+          [
+            note.id,
+            note.updated_at,
+            note.pinned,
+            note.archived,
+            note.collection_id,
+            note.tags.map((tag) => tag.id).join("."),
+          ].join(":"),
+        )
+        .join("|"),
+    [notes],
+  );
+
   useEffect(() => {
     // Clearing the box restores the full list with no round trip at all.
     if (!trimmedQuery) {
@@ -67,11 +98,6 @@ export function WorkspaceSidebar({
       setSearchError(null);
       return;
     }
-
-    // Referenced deliberately so this effect re-runs when a mutation revalidates
-    // the workspace. Without it, pinning or archiving mid-search would leave the
-    // visible result list in its pre-mutation order until the next keystroke.
-    void notes;
 
     const id = ++requestId.current;
 
@@ -93,7 +119,8 @@ export function WorkspaceSidebar({
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [trimmedQuery, notes]);
+    // The fingerprint, not the array: see `notesFingerprint` above.
+  }, [trimmedQuery, notesFingerprint]);
 
   /** Recorded only on commit — never on the debounce tick. */
   function commitSearch(value: string) {

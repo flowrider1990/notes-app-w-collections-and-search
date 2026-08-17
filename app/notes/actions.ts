@@ -387,19 +387,46 @@ export async function deleteNoteImageAction(id: string): Promise<ActionResult> {
   return { error: null };
 }
 
-export async function addTagToNoteAction(noteId: string, name: string) {
+/**
+ * Attaches a tag, creating it if this is its first use.
+ *
+ * Returns its failure like every other action here. These two used to throw, which
+ * escalated to an error boundary and took the note page down over something as
+ * ordinary as two tabs adding the same tag at once — a `23505` race that the tag
+ * editor can report in a line of text and recover from without losing anything.
+ */
+export async function addTagToNoteAction(
+  noteId: string,
+  name: string,
+): Promise<ActionResult> {
   await requireUser();
 
   const trimmed = name.trim();
-  if (!trimmed) return;
+  if (!trimmed) return { error: null };
 
-  await addTagToNote(noteId, trimmed);
+  try {
+    await addTagToNote(noteId, trimmed);
+  } catch (cause) {
+    return failure(cause, "Could not add the tag.");
+  }
+
   revalidateWorkspace();
+  return { error: null };
 }
 
-export async function removeTagFromNoteAction(noteId: string, tagId: string) {
+/** Detaches a tag from a note. The tag itself survives. */
+export async function removeTagFromNoteAction(
+  noteId: string,
+  tagId: string,
+): Promise<ActionResult> {
   await requireUser();
 
-  await removeTagFromNote(noteId, tagId);
+  try {
+    await removeTagFromNote(noteId, tagId);
+  } catch (cause) {
+    return failure(cause, "Could not remove the tag.");
+  }
+
   revalidateWorkspace();
+  return { error: null };
 }

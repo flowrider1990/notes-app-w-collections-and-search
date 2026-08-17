@@ -101,6 +101,15 @@ create index if not exists note_tags_tag_id_idx     on public.note_tags (tag_id)
 create index if not exists search_history_user_searched_idx
   on public.search_history (user_id, searched_at desc);
 
+-- One tag per name per user regardless of case. `unique (user_id, name)` alone let
+-- "work" and "Work" coexist as two pills that looked identical, drew the same colour
+-- (it is derived from the name) and filtered to disjoint sets of notes. `addTagToNote`
+-- folds case when looking for an existing tag; this index states the same rule where
+-- nothing can bypass it.
+-- Added by supabase/migrations/20260817155128_fold_tag_names_case_insensitively.sql.
+create unique index if not exists tags_user_id_lower_name_key
+  on public.tags (user_id, lower(name));
+
 -- ============================================================
 -- 3. updated_at trigger
 -- ============================================================
