@@ -22,16 +22,28 @@ database rather than in the client. Links resolve on any device.
 
 **Costs accepted.** Environment variables and a network dependency, so the app does not work offline.
 RLS has to be configured deliberately — a table with RLS enabled and no matching policy returns an
-empty array with no error, which presents as an empty database rather than a failure. Autosave now
-means a network round trip per debounced keystroke rather than a synchronous local write.
+empty array with no error, which presents as an empty database rather than a failure. Saving a note
+is a network round trip rather than a synchronous local write.
 
 ### Consequences
 
 - All access goes through one centralised helper module in `lib/db/`, so the storage mechanism stays
   swappable and error handling lives in one place.
-- Schema lives in `docs/schema.sql`, applied through the Supabase dashboard SQL editor.
-- Only the anon key is exposed to the client. Anything requiring the service role key indicates a
-  policy bug, not a missing key.
+- `docs/schema.sql` is the current-state reference for the whole schema. Changes go out as CLI
+  migrations in `supabase/migrations/` (`npx supabase db push --linked`) and are mirrored back into
+  that file; the dashboard SQL editor is the fallback when the CLI is unavailable.
+- Only the publishable key is exposed to the client. Anything requiring the secret or service-role key
+  indicates a policy bug, not a missing key.
+
+### Amendments
+
+- **Saving is explicit, not autosaved.** This entry originally assumed a debounced autosave. The
+  editor ships a Save button instead: a debounced write needs the same stale-response guarding the
+  search box carries, and it turns "did that save?" into something the user has to infer. The button
+  answers it, and `Unsaved changes` / `Saved` says so in words.
+- **Images are the one thing not in Postgres.** Attachments live in a private Supabase Storage bucket
+  with rows in `note_images` recording which note owns each file. Image bytes in a column would bloat
+  every read of that row and bypass the CDN. See section 7 of `docs/schema.sql`.
 
 ---
 

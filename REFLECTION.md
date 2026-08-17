@@ -5,9 +5,85 @@ delete unused headings without checking whether they were required.
 
 ---
 
+<!-- ==========================================================================
+     BEFORE YOU HAND THIS IN — delete this whole block once it is all done.
+     Deadline: 21 August 2026. Audited against project-context-and-requirements.md
+     on 17 August 2026; the code requirements all pass, these are what is left.
+     ========================================================================== -->
+
+## ⚠️ Pre-hand-in checklist
+
+### 1. Rewrite this file in your own voice — the brief asks for it explicitly
+
+> "REFLECTION.md (300–500 words) addressing three issues. **IMPORTANT: ask me, the dev, to fill them
+> in manually before the final commit**"
+
+Two long sections below are currently **Claude's words, not yours**: *Persistence decision* and
+*Optional task #2 — Full-text search*. Keep them as raw material and rewrite. Also: this file is
+**~1,500 words** against a 300–500 word target, so decide whether the grader wants the tight version
+or the full one.
+
+### 2. Fill the empty sections
+
+- [ ] **Optional task #1 — Collections and tag-based filtering.** Branch and PR are filled; the body
+      is still the template prompt.
+- [ ] **Fresh-session diff review.** Entirely empty (PR, finding, resolution). Evaluation criterion 5
+      wants "at least one merged pull request … with a fresh-session review noted". The
+      `/claude-md-review` section above it covers the *slash-command* topic, not this one.
+- [ ] **One sentence on the tags deviation.** The brief says "add a tags column to the notes table";
+      this app uses a `tags` table plus a `note_tags` join, which allows a colour per tag and reuse
+      across notes. Say so, or it reads as a missed requirement rather than a design decision.
+
+### 3. Add the data explanation — evaluation criterion 4, weight 2
+
+Criterion 4 asks that this file *or the review call* "explains what each relevant column means and
+describes how a new row is created when a note is added". Nothing here does that yet. Cover at least:
+`notes.id`, `notes.user_id` (defaults to `auth.uid()`, which is why no insert passes it),
+`collection_id` (nullable — a note can be uncategorised), `updated_at` (maintained by a database
+trigger, so it also moves when you pin or archive), and `search_vector` (a generated `tsvector`, kept
+in step by Postgres). Then: clicking **New note** calls a Server Action → `createNote()` in
+`lib/db/` → one `insert` with only `collection_id`, everything else from column defaults → RLS checks
+`user_id = auth.uid()` on the way in.
+
+### 4. Screenshots — one required, two bonus
+
+- [ ] **Required (criterion 5):** the workspace running locally, signed in, showing the sidebar with a
+      collection and coloured tags plus an open note. Save as **`docs/screenshot-workspace.png`** —
+      README.md already points at that exact path, so the image renders with no edit.
+- [ ] **Bonus — SQL scoping evidence.** Run this in the Supabase **SQL Editor** (the grader wants the
+      editor, not the CLI) and screenshot the result. It shows both accounts' rows with distinct
+      `user_id`s — 5 for `florian.eisler@gmail.com`, 3 for `abc@test.de`:
+      ```sql
+      select u.email, n.user_id, n.title, n.created_at
+      from public.notes n
+      join auth.users u on u.id = n.user_id
+      order by u.email, n.created_at;
+      ```
+- [ ] **Bonus — Authentication → Users tab**, showing the accounts registered during verification.
+      Criterion 4 asks you to be able to show this.
+- [ ] Attach the workspace shot to a PR and fill in the *Screenshot with collections visible* line
+      below.
+
+### 5. Run the auth-flaw scan from the authentication lesson
+
+Requirement 2 says to run it and fix anything it flags before merging. **It is not in this repo** —
+`.claude/commands/` holds only `claude-md-review.md`. Source it from the lesson, drop it in
+`.claude/commands/`, and it is one call to run against a PR diff.
+
+Worth knowing when you do: the flaw class it looks for — a check that trusts only the browser
+session — **was** present and was fixed. `requireUser()` used `getClaims()`, which verifies a token
+locally against a cached JWKS without ever asking the Auth server; it now calls `getUser()`. So expect
+a clean result, but the requirement is to have run *their* scan.
+
+<!-- ====================== end of pre-hand-in block ====================== -->
+
+---
+
 ## Persistence decision
 
 **Chosen: Supabase Postgres, reached through `@supabase/ssr` and confined to `lib/db/`.**
+Recorded as an ADR in [`docs/decisions.md`](docs/decisions.md#persistence), which carries the options
+considered and the costs accepted; this section is the short version.
 
 Web storage was never a candidate — the brief rules out `localStorage` and `sessionStorage`
 outright, and for good reason: neither can be scoped to a user, queried, or read from the server,
