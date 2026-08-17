@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { type NextRequest } from "next/server";
 
-import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
+import { safeNextPath } from "@/lib/auth-redirect";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -51,11 +51,7 @@ export async function GET(request: NextRequest) {
     redirect(`/auth/error?error=${encodeURIComponent(error.message)}`);
   }
 
-  // Only ever an in-app path: an absolute URL from the query string would turn
-  // this route into an open redirect, and `//host` is absolute to a browser.
-  const next = searchParams.get("next");
-  const destination =
-    next?.startsWith("/") && !next.startsWith("//") ? next : AFTER_SIGN_IN_PATH;
-
-  redirect(destination);
+  // Shared with `/auth/confirm`, which takes a destination from an email for the
+  // same reason and needs the same open-redirect guard.
+  redirect(safeNextPath(searchParams.get("next")));
 }

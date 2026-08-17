@@ -2,9 +2,14 @@
 
 import { cn } from "@/lib/utils";
 import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
-import { signInWithGoogle, signInWithPassword } from "@/lib/db/auth-browser";
+import {
+  signInWithPassword,
+  signInWithProvider,
+  type OAuthProvider,
+} from "@/lib/db/auth-browser";
 import { Button } from "@/components/ui/button";
 import { GoogleIcon } from "@/components/google-icon";
+import { Github } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -26,7 +31,9 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   /** Which sign-in is in flight, so only that button changes its label. */
-  const [pending, setPending] = useState<"password" | "google" | null>(null);
+  const [pending, setPending] = useState<"password" | OAuthProvider | null>(
+    null,
+  );
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -44,15 +51,15 @@ export function LoginForm({
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setPending("google");
+  const handleOAuthLogin = async (provider: OAuthProvider) => {
+    setPending(provider);
     setError(null);
 
     try {
-      await signInWithGoogle();
-      // No success branch: the call navigates to Google. The button stays in its
-      // pending state until the browser leaves, so clearing it here would only
-      // flash "Sign in with Google" back at the user mid-redirect.
+      await signInWithProvider(provider);
+      // No success branch: the call navigates to the provider. The button stays in
+      // its pending state until the browser leaves, so clearing it here would only
+      // flash the original label back at the user mid-redirect.
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
       setPending(null);
@@ -83,7 +90,15 @@ export function LoginForm({
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="password">Password</Label>
+                <div className="flex items-center">
+                  <Label htmlFor="password">Password</Label>
+                  <Link
+                    href="/auth/forgot-password"
+                    className="ml-auto inline-block text-sm underline-offset-4 hover:underline"
+                  >
+                    Forgot your password?
+                  </Link>
+                </div>
                 <Input
                   id="password"
                   type="password"
@@ -107,19 +122,35 @@ export function LoginForm({
                 <span className="h-px flex-1 bg-border" />
               </div>
 
-              {/* Inside the form, so it needs an explicit type: a bare button
+              {/* Inside the form, so both need an explicit type: a bare button
                   submits the email and password instead. */}
               <Button
                 type="button"
                 variant="outline"
                 className="w-full"
                 disabled={pending !== null}
-                onClick={handleGoogleLogin}
+                onClick={() => handleOAuthLogin("google")}
               >
                 <GoogleIcon />
                 {pending === "google"
-                  ? "Redirecting to Google..."
+                  ? "Redirecting to Google…"
                   : "Sign in with Google"}
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={pending !== null}
+                onClick={() => handleOAuthLogin("github")}
+              >
+                {/* GitHub's mark is monochrome by design, so lucide's icon is the
+                    real thing rather than an approximation — unlike Google's, which
+                    needs its four colours and lives in its own component. */}
+                <Github size={16} aria-hidden />
+                {pending === "github"
+                  ? "Redirecting to GitHub…"
+                  : "Sign in with GitHub"}
               </Button>
             </div>
             <div className="mt-4 text-center text-sm">
