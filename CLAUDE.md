@@ -121,7 +121,8 @@ errors. Do **not** run `npm run dev` in a tool call; it never exits and will han
 
 ## Supabase conventions
 
-Five tables: `notes`, `collections`, `tags`, `note_tags`, `search_history`.
+Six tables: `notes`, `collections`, `tags`, `note_tags`, `search_history`, `note_images` — plus one
+Storage bucket, `note-images`.
 
 - `notes` → `collections` is many-to-one via `notes.collection_id`, nullable so a note can be
   uncategorised.
@@ -138,6 +139,17 @@ Five tables: `notes`, `collections`, `tags`, `note_tags`, `search_history`.
   The query string is built by `toTsQuery` in `lib/search-query.ts`, which strips tsquery operators
   out of user input — raw text reaching `to_tsquery` raises `42601` rather than matching nothing. The
   `config` must stay `'english'` on both sides or the stems will not line up and nothing matches.
+- **Image attachments live in Storage, never in Postgres.** `note_images` records which note each
+  file belongs to; the bytes sit in the private `note-images` bucket under
+  `{user_id}/{note_id}/{uuid}.{ext}`. No base64 columns — a photograph in a row would bloat every
+  read of that row and bypass the CDN. Because the bucket is private, rendering an attachment needs
+  a signed URL minted server-side from the owner's session, so `getNoteImages` returns URLs rather
+  than paths and the page mints fresh ones on each visit. Shared collections show title and body
+  only: images are the owner's, and `/share/**` must not gain a second anonymous read path.
+  Uploads go through a Server Action, not the browser talking to Storage, which keeps the Supabase
+  client out of components and makes the upload and its row one call that either works or says why.
+  Deleting a note deletes its files first — Postgres cascades the rows but knows nothing about
+  Storage, so the other order strands the objects.
 - **Shared collections are the one sanctioned RLS bypass.** `collections.share_token` plus the
   `security definer` function `public.shared_collection(token uuid)`, granted to `anon`, is how a
   share link is read without a session. This does *not* contradict rule 5: no secret or service-role

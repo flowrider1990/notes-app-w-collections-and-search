@@ -36,6 +36,16 @@ export function NoteSkeleton() {
         </div>
       </div>
 
+      <div className="flex flex-col gap-3">
+        <SectionLabel>Images</SectionLabel>
+        <div className="grid grid-cols-3 gap-3">
+          <Skeleton className="aspect-square rounded-lg" />
+          <Skeleton className="aspect-square rounded-lg" />
+          <Skeleton className="aspect-square rounded-lg" />
+        </div>
+        <Skeleton className="h-8 w-28" />
+      </div>
+
       {/* Save button and its status line. */}
       <div className="flex items-center gap-3">
         <Skeleton className="h-9 w-20" />

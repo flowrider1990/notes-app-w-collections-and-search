@@ -4,9 +4,10 @@ import { notFound } from "next/navigation";
 import { CollectionPicker } from "@/components/notes/collection-picker";
 import { DeleteNote } from "@/components/notes/delete-note";
 import { NoteEditor } from "@/components/notes/note-editor";
+import { NoteImages } from "@/components/notes/note-images";
 import { NoteSkeleton } from "@/components/notes/note-skeleton";
 import { TagEditor } from "@/components/notes/tag-editor";
-import { getCollections, getNote } from "@/lib/db";
+import { getCollections, getNote, getNoteImages } from "@/lib/db";
 import { requireUser } from "@/lib/db/auth";
 
 type NotePageProps = {
@@ -14,18 +15,26 @@ type NotePageProps = {
 };
 
 /**
- * The note itself: title and body in an editor, then its collection, its tags, and
- * the delete control.
+ * The note itself: title and body in an editor, then its collection, its tags, its
+ * images, and the delete control.
  *
  * The text is editable client-side while everything below the rule is a separate
  * control writing straight through its own Server Action — so a note's metadata
  * changes without going near the unsaved state of the editor above it.
+ *
+ * Images are fetched here rather than in the component because their URLs are signed
+ * server-side against the owner's session; the bucket is private, so an unsigned URL
+ * renders nothing. Each visit mints fresh ones.
  */
 async function NoteDetail({ params }: NotePageProps) {
   const { id } = await params;
   await requireUser();
 
-  const [note, collections] = await Promise.all([getNote(id), getCollections()]);
+  const [note, collections, images] = await Promise.all([
+    getNote(id),
+    getCollections(),
+    getNoteImages(id),
+  ]);
 
   // A missing note and a note owned by someone else are indistinguishable
   // through RLS, and both should read as "not found".
@@ -51,6 +60,8 @@ async function NoteDetail({ params }: NotePageProps) {
         />
 
         <TagEditor noteId={note.id} tags={note.tags} />
+
+        <NoteImages noteId={note.id} images={images} />
       </NoteEditor>
 
       <hr />

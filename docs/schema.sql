@@ -422,7 +422,111 @@ revoke all on function public.shared_collection(uuid) from public;
 grant execute on function public.shared_collection(uuid) to anon, authenticated;
 
 -- ============================================================
--- 7. Verification
+-- 7. Image attachments
+-- ============================================================
+-- Files in Supabase Storage, rows here recording which note each belongs to. No
+-- image bytes in Postgres: a base64 column would bloat every read of the row,
+-- bypass the CDN, and break outright on a photograph.
+--
+-- The bucket is **private**. Rendering an attachment needs a signed URL minted from
+-- the owner's session, which is what keeps the anonymous read surface exactly where
+-- section 6 leaves it — one token-gated function, and nothing else. Shared
+-- collections deliberately show title and body only, never images.
+--
+-- Object layout is `{user_id}/{note_id}/{uuid}.{ext}`. The storage policies match on
+-- that first segment, so a user can only reach their own prefix. The uuid filename
+-- is deliberate: an uploaded filename from a client has no business becoming a path,
+-- and two photos called IMG_0001.jpg must not collide.
+--
+-- Added by supabase/migrations/20260817145538_add_note_images.sql.
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'note-images',
+  'note-images',
+  false,
+  5242880, -- 5 MiB
+  array['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+)
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+-- INSERT, SELECT and DELETE only. Nothing overwrites an object — each upload gets a
+-- fresh uuid name — so there is no upsert, and upsert is the one operation that
+-- would also need UPDATE.
+
+drop policy if exists note_images_storage_insert on storage.objects;
+create policy note_images_storage_insert on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'note-images'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+drop policy if exists note_images_storage_select on storage.objects;
+create policy note_images_storage_select on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'note-images'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+drop policy if exists note_images_storage_delete on storage.objects;
+create policy note_images_storage_delete on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'note-images'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+-- `storage_path` is unique, so a double submit cannot record the same file twice.
+-- Cascades from `notes` — but Postgres cannot cascade into Storage, so `deleteNote`
+-- in lib/db/ removes the objects before deleting the note. A row vanishing here does
+-- not free the file.
+
+create table if not exists public.note_images (
+  id            uuid primary key default gen_random_uuid(),
+  note_id       uuid not null references public.notes(id) on delete cascade,
+  user_id       uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  storage_path  text not null unique,
+  mime_type     text not null,
+  size_bytes    integer not null,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists note_images_note_id_idx on public.note_images (note_id);
+create index if not exists note_images_user_id_idx on public.note_images (user_id);
+
+alter table public.note_images enable row level security;
+
+-- INSERT checks the parent note as well as the owner, so a row cannot be attached to
+-- someone else's note by passing its id. No UPDATE policy: an attachment row is only
+-- ever created and deleted, and a policy for an operation nothing performs would only
+-- widen the surface.
+
+drop policy if exists note_images_select on public.note_images;
+create policy note_images_select on public.note_images
+  for select to authenticated using (user_id = (select auth.uid()));
+
+drop policy if exists note_images_insert on public.note_images;
+create policy note_images_insert on public.note_images
+  for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and exists (
+      select 1 from public.notes n
+      where n.id = note_id and n.user_id = (select auth.uid())
+    )
+  );
+
+drop policy if exists note_images_delete on public.note_images;
+create policy note_images_delete on public.note_images
+  for delete to authenticated using (user_id = (select auth.uid()));
+
+-- ============================================================
+-- 8. Verification
 -- ============================================================
 -- Run these after the above. Expect five rows from the first, and policy rows for
 -- all five tables from the second.

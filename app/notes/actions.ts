@@ -4,11 +4,13 @@ import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/db/auth";
 import {
+  addNoteImage,
   addTagToNote,
   clearSearchHistory,
   createCollection,
   createNote,
   deleteNote,
+  deleteNoteImage,
   recordSearch,
   removeSearchHistoryEntry,
   removeTagFromNote,
@@ -331,6 +333,54 @@ export async function clearSearchHistoryAction(): Promise<ActionResult> {
     await clearSearchHistory();
   } catch (cause) {
     return failure(cause, "Could not clear the search history.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Attaches an uploaded image to a note.
+ *
+ * Takes `FormData` because that is how a file reaches a Server Action — the bytes are
+ * multipart, not a serialisable argument. `next.config.ts` raises the action body
+ * limit to 6mb for the same reason: the default 1MB would reject most photographs
+ * before any of this code ran.
+ *
+ * The user comes from `requireUser()`, whose id becomes the first segment of the
+ * object path. The storage policy checks that segment against `auth.uid()`, so the
+ * path cannot be aimed at another user's folder.
+ */
+export async function uploadNoteImageAction(
+  noteId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const user = await requireUser();
+
+  const file = formData.get("file");
+
+  if (!(file instanceof File)) {
+    return { error: "No file was received." };
+  }
+
+  try {
+    await addNoteImage(noteId, user.id, file);
+  } catch (cause) {
+    return failure(cause, "Could not attach the image.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/** Detaches an image from its note and deletes the file behind it. */
+export async function deleteNoteImageAction(id: string): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await deleteNoteImage(id);
+  } catch (cause) {
+    return failure(cause, "Could not delete the image.");
   }
 
   revalidateWorkspace();
