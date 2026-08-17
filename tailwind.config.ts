@@ -7,6 +7,10 @@ export default {
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/**/*.{js,ts,jsx,tsx,mdx}",
+    // lib/ holds the tag palette's literal class names. Without this glob
+    // Tailwind never sees them, so the classes reach the DOM with no CSS behind
+    // them and tags render uncoloured.
+    "./lib/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     extend: {

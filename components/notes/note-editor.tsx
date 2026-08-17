@@ -1,0 +1,134 @@
+"use client";
+
+import { useState, useTransition } from "react";
+
+import { updateNoteAction } from "@/app/notes/actions";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
+type NoteEditorProps = {
+  noteId: string;
+  initialTitle: string;
+  initialBody: string;
+  /**
+   * Rendered between the body and the Save button — the note's collection and tag
+   * controls. They belong to this component's layout but not to its state: each
+   * writes through its own Server Action and saves the moment it is used, so
+   * nothing here is waiting on them.
+   *
+   * They arrive as children because Save has to live below them, and Save cannot
+   * leave this component: it is the only thing that knows whether the text is
+   * dirty.
+   */
+  children?: React.ReactNode;
+};
+
+/**
+ * Authoring a note: a title field, a body field, and an explicit Save.
+ *
+ * Saving is deliberate rather than automatic. A debounced autosave would need the
+ * same stale-response guarding the search box carries, and it makes "did that
+ * save?" a question the user has to infer. A button answers it.
+ *
+ * The body is plain text. CLAUDE.md once described a Markdown preview toggle;
+ * rendering Markdown means a new dependency, so that is a later decision rather
+ * than something quietly assumed here.
+ */
+export function NoteEditor({
+  noteId,
+  initialTitle,
+  initialBody,
+  children,
+}: NoteEditorProps) {
+  const [title, setTitle] = useState(initialTitle);
+  const [body, setBody] = useState(initialBody);
+  /**
+   * What the database is believed to hold. Tracked here rather than compared
+   * against the props: saving revalidates the workspace, which re-renders this
+   * component with fresh props but *keeps* its state, so props alone would never
+   * clear the dirty flag.
+   */
+  const [saved, setSaved] = useState({ title: initialTitle, body: initialBody });
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const dirty = title !== saved.title || body !== saved.body;
+
+  function save() {
+    if (!dirty) return;
+
+    setError(null);
+
+    startTransition(async () => {
+      const result = await updateNoteAction(noteId, title, body);
+
+      if (result.error) {
+        // The text stays in the box. Losing an edit to a failed write would be
+        // the worst thing this component could do.
+        setError(result.error);
+        return;
+      }
+
+      // The values captured when this save started, not whatever is in the box
+      // now — typing during a save leaves the note correctly dirty again.
+      setSaved({ title, body });
+    });
+  }
+
+  function status() {
+    if (pending) return "Saving…";
+    if (dirty) return "Unsaved changes";
+    return "Saved";
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4">
+        <label htmlFor="note-title" className="sr-only">
+          Title
+        </label>
+        <Input
+          id="note-title"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Untitled"
+          className="h-auto border-0 px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0 md:text-2xl"
+        />
+
+        <label htmlFor="note-body" className="sr-only">
+          Body
+        </label>
+        <Textarea
+          id="note-body"
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="Write your note…"
+          className="min-h-[40vh] resize-y"
+        />
+      </div>
+
+      {children}
+
+      {/* Last, so it reads as "save this note" rather than "save the body" — the
+          collection and tag controls above it save themselves. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <Button type="button" onClick={save} disabled={pending || !dirty}>
+            {pending ? "Saving…" : "Save"}
+          </Button>
+
+          <p aria-live="polite" className="text-sm text-muted-foreground">
+            {status()}
+          </p>
+        </div>
+
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}

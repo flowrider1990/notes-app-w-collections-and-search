@@ -47,16 +47,50 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
 
+  /**
+   * A redirect that carries over whatever cookies the Supabase client just wrote.
+   *
+   * `getClaims()` refreshes a session that is close to expiring, and those new
+   * cookies live on `supabaseResponse`. Returning a bare `NextResponse.redirect`
+   * would drop them and sign the user out at random — the exact failure the notes
+   * at the end of this function warn about.
+   */
+  function redirectTo(pathname: string) {
+    const url = request.nextUrl.clone();
+    url.pathname = pathname;
+
+    const response = NextResponse.redirect(url);
+    supabaseResponse.cookies
+      .getAll()
+      .forEach((cookie) => response.cookies.set(cookie));
+
+    return response;
+  }
+
+  // A signed-in visitor has no use for the landing page — it exists to offer a way
+  // in, and they are already in. Redirecting here keeps `/` free of any session
+  // read, so it stays a fully static page.
+  //
+  // `getClaims()` is enough for this one decision because nothing is being
+  // protected: a forged token would land on `/notes`, where `requireUser()` asks
+  // the Auth server and turns it away. See rule 6 in CLAUDE.md.
+  if (user && request.nextUrl.pathname === "/") {
+    return redirectTo("/notes");
+  }
+
   if (
     request.nextUrl.pathname !== "/" &&
     !user &&
     !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
+    !request.nextUrl.pathname.startsWith("/auth") &&
+    // Share links are meant to work without a session. Without this the recipient
+    // is redirected to the login page and the whole feature is unreachable. The
+    // route itself is still gated: it reads through the token-scoped
+    // `shared_collection` function, so an unknown token renders a 404.
+    !request.nextUrl.pathname.startsWith("/share")
   ) {
     // no user, potentially respond by redirecting the user to the login page
-    const url = request.nextUrl.clone();
-    url.pathname = "/auth/login";
-    return NextResponse.redirect(url);
+    return redirectTo("/auth/login");
   }
 
   // IMPORTANT: You *must* return the supabaseResponse object as it is.
