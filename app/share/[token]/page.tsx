@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 
+import { SharedCollectionSkeleton } from "@/components/notes/shared-collection-skeleton";
 import { getSharedCollection } from "@/lib/db";
 
 type SharePageProps = {
@@ -72,13 +73,7 @@ async function SharedCollection({ params }: SharePageProps) {
  */
 export default function SharePage({ params }: SharePageProps) {
   return (
-    <Suspense
-      fallback={
-        <p className="p-6 text-sm text-muted-foreground">
-          Loading shared collection…
-        </p>
-      }
-    >
+    <Suspense fallback={<SharedCollectionSkeleton />}>
       <SharedCollection params={params} />
     </Suspense>
   );

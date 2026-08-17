@@ -10,6 +10,7 @@ import { NewNote } from "@/components/notes/new-note";
 import { SearchHistory } from "@/components/notes/search-history";
 import { TagPill } from "@/components/notes/tag-pill";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type { Collection, Note, SearchHistoryEntry, Tag } from "@/lib/db";
 
 type WorkspaceSidebarProps = {
@@ -241,7 +242,17 @@ export function WorkspaceSidebar({
       ) : filterActive && filteredActive.length === 0 ? (
         <p className="text-sm text-muted-foreground">{noResultsMessage()}</p>
       ) : (
-        <div className="flex flex-col gap-2">
+        /* Faded while a search is in flight. The previous results stay mounted on
+           purpose — swapping them for a skeleton on every keystroke would be far
+           worse than showing them slightly stale — but at full opacity they look
+           like an answer to the query being typed, which they are not. */
+        <div
+          aria-busy={searching}
+          className={cn(
+            "flex flex-col gap-2 transition-opacity",
+            searching && "opacity-50",
+          )}
+        >
           {collections.map((collection) => {
             const inCollection = filteredActive.filter(
               (note) => note.collection_id === collection.id,
