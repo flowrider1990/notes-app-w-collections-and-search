@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Download } from "lucide-react";
 
 import { updateNoteAction } from "@/app/notes/actions";
+import { markdownFilename, toMarkdown } from "@/lib/markdown-export";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SectionLabel } from "@/components/ui/section-label";
@@ -56,24 +58,64 @@ export function NoteEditor({
 
   const dirty = title !== saved.title || body !== saved.body;
 
+  /**
+   * Writes the note and reports whether it worked, so Export can refuse to hand
+   * over a file that does not match the database.
+   */
+  async function persist(): Promise<boolean> {
+    const result = await updateNoteAction(noteId, title, body);
+
+    if (result.error) {
+      // The text stays in the box. Losing an edit to a failed write would be the
+      // worst thing this component could do.
+      setError(result.error);
+      return false;
+    }
+
+    // The values captured when this save started, not whatever is in the box now —
+    // typing during a save leaves the note correctly dirty again.
+    setSaved({ title, body });
+    return true;
+  }
+
   function save() {
     if (!dirty) return;
 
     setError(null);
+    startTransition(async () => {
+      await persist();
+    });
+  }
+
+  /**
+   * Saves first, then downloads — so the file the user keeps is the note the
+   * database holds, not a snapshot of an editor they had not committed.
+   *
+   * A failed save cancels the download. Handing over a file at that point would be
+   * the one outcome worse than no file: it looks like the note was saved.
+   */
+  function exportMarkdown() {
+    setError(null);
 
     startTransition(async () => {
-      const result = await updateNoteAction(noteId, title, body);
+      if (dirty && !(await persist())) return;
 
-      if (result.error) {
-        // The text stays in the box. Losing an edit to a failed write would be
-        // the worst thing this component could do.
-        setError(result.error);
-        return;
-      }
+      const markdown = toMarkdown({ title, body });
+      const url = URL.createObjectURL(
+        new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
+      );
 
-      // The values captured when this save started, not whatever is in the box
-      // now — typing during a save leaves the note correctly dirty again.
-      setSaved({ title, body });
+      // A synthetic link rather than any download helper: this is the whole of it,
+      // and a dependency for six lines is not a trade worth making.
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = markdownFilename(title);
+      document.body.append(link);
+      link.click();
+      link.remove();
+
+      // Without this the blob stays in memory for the life of the page.
+      URL.revokeObjectURL(url);
     });
   }
 
@@ -121,6 +163,19 @@ export function NoteEditor({
         <div className="flex items-center gap-3">
           <Button type="button" onClick={save} disabled={pending || !dirty}>
             {pending ? "Saving…" : "Save"}
+          </Button>
+
+          {/* Outline, so Save stays the only filled button on the page. Enabled
+              even with nothing to save — exporting an unchanged note is the
+              ordinary case. */}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={exportMarkdown}
+            disabled={pending}
+          >
+            <Download size={16} aria-hidden />
+            Export .md
           </Button>
 
           {/* Same mono treatment as the section labels: this is the app reporting

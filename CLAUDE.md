@@ -10,6 +10,11 @@ The body is **plain text**. Markdown rendering with an edit/preview toggle is a 
 task, not something that exists — it needs a rendering library, which is rule 2's territory. Do
 not write code or docs that assume it is there.
 
+A note can be exported as a `.md` file from the editor's action row. That is a download, not a
+renderer: `lib/markdown-export.ts` turns the note into `# Title` plus the body verbatim, and the
+button saves any pending edit first so the file matches what the database holds. A failed save
+cancels the download.
+
 Single-user with one deliberate exception: a collection can be shared by link, and that link is
 readable without signing in. See "Shared collections" below — it is the only anonymous read path in
 the app.
