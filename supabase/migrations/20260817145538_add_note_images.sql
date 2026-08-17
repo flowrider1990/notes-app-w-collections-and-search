@@ -73,9 +73,10 @@ create policy note_images_storage_delete on storage.objects
 -- ============================================================
 -- `storage_path` is unique: one row per object, so a double-submit cannot record
 -- the same file twice. Cascades from `notes`, which keeps the table honest — but
--- note that Postgres cannot cascade into Storage, so `deleteNote` in lib/db/ removes
--- the objects before it deletes the note. A row disappearing here does not free the
--- file on its own.
+-- note that Postgres cannot cascade into Storage. `deleteNote` in lib/db/ therefore
+-- reads the paths, deletes the note, and removes the objects last: files-first would
+-- risk destroying them and then failing to delete the note, and orphaned objects are
+-- waste where that would be loss.
 
 create table if not exists public.note_images (
   id            uuid primary key default gen_random_uuid(),

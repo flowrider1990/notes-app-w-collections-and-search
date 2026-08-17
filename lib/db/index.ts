@@ -105,6 +105,19 @@ const ALLOWED_IMAGE_TYPES: Record<string, string> = {
   "image/gif": "gif",
 };
 
+/**
+ * Looks up the extension for a MIME type, or null if it is not allowed.
+ *
+ * `Object.hasOwn` rather than a bare index: the type comes off an uploaded file, and
+ * a plain lookup answers for inherited members too, so `Content-Type: toString` would
+ * resolve to a function and read as permitted.
+ */
+function imageExtension(mimeType: string): string | null {
+  return Object.hasOwn(ALLOWED_IMAGE_TYPES, mimeType)
+    ? ALLOWED_IMAGE_TYPES[mimeType]
+    : null;
+}
+
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type NoteRow = Omit<Note, "tags"> & {
@@ -355,10 +368,12 @@ export async function updateNote(
  * cascade — so nothing is left pointing at a note that is gone. The tags themselves
  * survive, since they belong to the user rather than to one note.
  *
- * The image *files* need removing by hand first. Postgres cannot cascade into
- * Storage, so deleting the note before its objects would strand them in the bucket
- * with no row left to name them: unreachable, unlistable by the app, and still
- * counting against storage.
+ * The image *files* have to be removed by hand, because Postgres cannot cascade into
+ * Storage. Order matters and there is no transaction spanning both: the paths are
+ * read first, the row is deleted, and only then are the files removed. Deleting the
+ * files first would risk destroying them and then failing to delete the note —
+ * irreversible loss with the note still sitting there. This way the worst case is
+ * orphaned objects: waste, not loss.
  *
  * Reads back the id for the same reason as `updateNote`: without it a delete that
  * matched nothing is indistinguishable from one that worked.
@@ -366,7 +381,9 @@ export async function updateNote(
 export async function deleteNote(id: string): Promise<void> {
   const supabase = await createClient();
 
-  await removeImageObjectsForNote(id);
+  // Read before the delete: the cascade takes these rows with it, and after that
+  // nothing knows which files belonged to this note.
+  const paths = await imagePathsForNote(id);
 
   const { data, error } = await supabase
     .from("notes")
@@ -380,6 +397,14 @@ export async function deleteNote(id: string): Promise<void> {
 
   if ((data ?? []).length === 0) {
     throw new Error("Could not delete note: it no longer exists.");
+  }
+
+  if (paths.length > 0) {
+    // Deliberately not fatal. The note is gone, which is what was asked; a failure
+    // here leaves unreachable files behind, and reporting that as "could not delete
+    // the note" would describe the wrong outcome to someone whose note has in fact
+    // been deleted. There is nothing they could do about it either way.
+    await supabase.storage.from(IMAGE_BUCKET).remove(paths);
   }
 }
 
@@ -730,10 +755,19 @@ export async function getNoteImages(noteId: string): Promise<SignedNoteImage[]> 
     throw new Error(`Could not sign image URLs: ${signError.message}`);
   }
 
-  // `createSignedUrls` answers in the order it was asked, and reports per-path
-  // failures in the row's own `error` field rather than rejecting the batch.
-  return images.flatMap((image, index) => {
-    const url = signed?.[index]?.signedUrl;
+  // Paired by path, not by position. `createSignedUrls` answers in order today and
+  // reports per-path failures in each row's own `error` field, but pairing on the
+  // index would silently mis-align `id` with `url` if that ever stopped holding —
+  // and a mis-aligned URL means the delete button removes a different image than the
+  // one the user is looking at.
+  const urlByPath = new Map(
+    (signed ?? []).flatMap((row) =>
+      row.path && row.signedUrl ? [[row.path, row.signedUrl] as const] : [],
+    ),
+  );
+
+  return images.flatMap((image) => {
+    const url = urlByPath.get(image.storage_path);
     return url ? [{ ...image, url }] : [];
   });
 }
@@ -757,7 +791,7 @@ export async function addNoteImage(
   userId: string,
   file: File,
 ): Promise<void> {
-  const extension = ALLOWED_IMAGE_TYPES[file.type];
+  const extension = imageExtension(file.type);
 
   if (!extension) {
     throw new Error("Images must be PNG, JPEG, WebP or GIF.");
@@ -794,7 +828,18 @@ export async function addNoteImage(
 
   if (error) {
     // Nothing references the object now, so leaving it would strand it for good.
-    await supabase.storage.from(IMAGE_BUCKET).remove([path]);
+    // If even the cleanup fails, say so in the same breath rather than reporting a
+    // tidy failure over an untidy one.
+    const { error: cleanupError } = await supabase.storage
+      .from(IMAGE_BUCKET)
+      .remove([path]);
+
+    if (cleanupError) {
+      throw new Error(
+        `Could not attach image: ${error.message}. The uploaded file could not be removed either — ${cleanupError.message}`,
+      );
+    }
+
     throw new Error(`Could not attach image: ${error.message}`);
   }
 }
@@ -845,12 +890,12 @@ export async function deleteNoteImage(id: string): Promise<void> {
 }
 
 /**
- * Removes every image *file* belonging to a note, leaving the rows to the caller.
+ * The Storage paths of a note's images.
  *
- * Used by `deleteNote`, which relies on the `note_images` foreign key to cascade the
- * rows away — a cascade Storage knows nothing about.
+ * Read by `deleteNote` before it deletes the row, because the `note_images` cascade
+ * takes that knowledge with it — a cascade Storage knows nothing about.
  */
-async function removeImageObjectsForNote(noteId: string): Promise<void> {
+async function imagePathsForNote(noteId: string): Promise<string[]> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -862,17 +907,7 @@ async function removeImageObjectsForNote(noteId: string): Promise<void> {
     throw new Error(`Could not list the note's images: ${error.message}`);
   }
 
-  const paths = (data ?? []).map(
+  return (data ?? []).map(
     (row) => (row as { storage_path: string }).storage_path,
   );
-
-  if (paths.length === 0) return;
-
-  const { error: storageError } = await supabase.storage
-    .from(IMAGE_BUCKET)
-    .remove(paths);
-
-  if (storageError) {
-    throw new Error(`Could not delete the note's images: ${storageError.message}`);
-  }
 }

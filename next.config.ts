@@ -7,23 +7,28 @@ import type { NextConfig } from "next";
  * Supabase clients use — hardcoding the project ref here would break the moment the
  * project changes.
  */
-const supabaseHostname = process.env.NEXT_PUBLIC_SUPABASE_URL
-  ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname
-  : undefined;
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  // Failing here beats falling back to an empty allow-list: that would build fine
+  // and then serve a 400 for every thumbnail, with nothing in the output to say why.
+  // The app cannot run without this variable anyway — see "Running it" in CLAUDE.md.
+  throw new Error(
+    "NEXT_PUBLIC_SUPABASE_URL is not set, so next/image cannot be told which host serves note images. Add it to .env.local.",
+  );
+}
+
+const supabaseHostname = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname;
 
 const nextConfig: NextConfig = {
   cacheComponents: true,
 
   images: {
-    remotePatterns: supabaseHostname
-      ? [
-          {
-            protocol: "https",
-            hostname: supabaseHostname,
-            pathname: "/storage/v1/object/**",
-          },
-        ]
-      : [],
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: supabaseHostname,
+        pathname: "/storage/v1/object/**",
+      },
+    ],
   },
 
   experimental: {

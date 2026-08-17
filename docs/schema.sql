@@ -483,8 +483,10 @@ create policy note_images_storage_delete on storage.objects
 
 -- `storage_path` is unique, so a double submit cannot record the same file twice.
 -- Cascades from `notes` — but Postgres cannot cascade into Storage, so `deleteNote`
--- in lib/db/ removes the objects before deleting the note. A row vanishing here does
--- not free the file.
+-- in lib/db/ reads the paths, deletes the note, and only then removes the objects. A
+-- row vanishing here does not free the file. That order is chosen on purpose: files
+-- first would risk destroying them and then failing to delete the note, which is
+-- irreversible loss, where this way the worst case is orphaned objects.
 
 create table if not exists public.note_images (
   id            uuid primary key default gen_random_uuid(),
@@ -528,12 +530,22 @@ create policy note_images_delete on public.note_images
 -- ============================================================
 -- 8. Verification
 -- ============================================================
--- Run these after the above. Expect five rows from the first, and policy rows for
--- all five tables from the second.
+-- Run these after the above. Expect six rows from the first, and policy rows for all
+-- six tables from the second.
 
 -- select table_name from information_schema.tables
 --   where table_schema = 'public'
---     and table_name in ('notes','collections','tags','note_tags','search_history');
+--     and table_name in ('notes','collections','tags','note_tags','search_history','note_images');
+
+-- The bucket must exist and must not be public: a public bucket would make every
+-- attachment readable by anyone holding a URL, which is a second anonymous read path.
+-- select id, public, file_size_limit, allowed_mime_types from storage.buckets
+--   where id = 'note-images';
+
+-- Three storage policies, all scoped to the bucket and the owner's folder.
+-- select policyname, cmd, roles from pg_policies
+--   where schemaname = 'storage' and tablename = 'objects'
+--     and policyname like 'note_images_storage%';
 
 -- Every row should read {authenticated}; a {public} row is a policy that predates
 -- the hardening migration and still applies to anon.

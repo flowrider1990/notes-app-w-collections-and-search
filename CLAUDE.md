@@ -148,8 +148,10 @@ Storage bucket, `note-images`.
   only: images are the owner's, and `/share/**` must not gain a second anonymous read path.
   Uploads go through a Server Action, not the browser talking to Storage, which keeps the Supabase
   client out of components and makes the upload and its row one call that either works or says why.
-  Deleting a note deletes its files first — Postgres cascades the rows but knows nothing about
-  Storage, so the other order strands the objects.
+  Deleting a note reads the paths, deletes the row, then removes the files: Postgres cascades the
+  rows but knows nothing about Storage, and there is no transaction across both. Files-first would
+  risk destroying them and then failing to delete the note — irreversible loss — so the order is
+  chosen to make the worst case orphaned objects instead.
 - **Shared collections are the one sanctioned RLS bypass.** `collections.share_token` plus the
   `security definer` function `public.shared_collection(token uuid)`, granted to `anon`, is how a
   share link is read without a session. This does *not* contradict rule 5: no secret or service-role

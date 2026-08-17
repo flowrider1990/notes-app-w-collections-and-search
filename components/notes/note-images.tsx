@@ -21,6 +21,15 @@ type NoteImagesProps = {
 const ACCEPTED = "image/png,image/jpeg,image/webp,image/gif";
 
 /**
+ * Mirrors the bucket's `file_size_limit`, and checked here as well as on the server
+ * for a reason that is not politeness: an oversized file exceeds the Server Action
+ * body limit, so the request fails in the transport rather than returning
+ * `{ error }`. Without this the note page falls into an error boundary instead of
+ * telling the user their photo is too big.
+ */
+const MAX_BYTES = 5 * 1024 * 1024;
+
+/**
  * The open note's image attachments: a picker, and a grid of what is already
  * attached.
  *
@@ -40,12 +49,24 @@ export function NoteImages({ noteId, images }: NoteImagesProps) {
   function upload(file: File) {
     setError(null);
 
+    if (file.size > MAX_BYTES) {
+      setError("Images must be 5 MB or smaller.");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
 
     startTransition(async () => {
-      const result = await uploadNoteImageAction(noteId, formData);
-      if (result.error) setError(result.error);
+      // Caught rather than left to reject: a network drop or a body-limit rejection
+      // never reaches the action, so there is no `{ error }` to read, and an
+      // unhandled rejection here takes the whole note page into an error boundary.
+      try {
+        const result = await uploadNoteImageAction(noteId, formData);
+        if (result.error) setError(result.error);
+      } catch {
+        setError("The upload did not go through. Check the file and try again.");
+      }
     });
   }
 
@@ -53,8 +74,12 @@ export function NoteImages({ noteId, images }: NoteImagesProps) {
     setError(null);
 
     startTransition(async () => {
-      const result = await deleteNoteImageAction(id);
-      if (result.error) setError(result.error);
+      try {
+        const result = await deleteNoteImageAction(id);
+        if (result.error) setError(result.error);
+      } catch {
+        setError("Could not delete the image. Try again.");
+      }
     });
   }
 
@@ -79,12 +104,16 @@ export function NoteImages({ noteId, images }: NoteImagesProps) {
                 />
               </div>
 
+              {/* Always visible, unlike the hover-revealed controls on note cards.
+                  Deleting an image cannot be undone, and a hover-only control is
+                  invisible on a touch screen — where the first tap that reveals it
+                  would be the tap that fires it. */}
               <button
                 type="button"
                 onClick={() => remove(image.id)}
                 disabled={pending}
                 aria-label="Delete image"
-                className="absolute right-1.5 top-1.5 rounded-md bg-background/90 p-1 opacity-0 shadow-sm transition-opacity hover:bg-background focus-visible:opacity-100 disabled:opacity-50 group-hover:opacity-100"
+                className="absolute right-1.5 top-1.5 rounded-md border bg-background/90 p-1 shadow-sm transition-colors hover:bg-accent disabled:opacity-50"
               >
                 <X size={14} aria-hidden />
               </button>
