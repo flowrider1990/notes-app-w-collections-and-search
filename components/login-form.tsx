@@ -2,14 +2,9 @@
 
 import { cn } from "@/lib/utils";
 import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
-import {
-  signInWithPassword,
-  signInWithProvider,
-  type OAuthProvider,
-} from "@/lib/db/auth-browser";
+import { signInWithPassword } from "@/lib/db/auth-browser";
 import { Button } from "@/components/ui/button";
-import { GoogleIcon } from "@/components/google-icon";
-import { Github } from "lucide-react";
+import { OAuthButtons } from "@/components/oauth-buttons";
 import {
   Card,
   CardContent,
@@ -30,15 +25,13 @@ export function LoginForm({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  /** Which sign-in is in flight, so only that button changes its label. */
-  const [pending, setPending] = useState<"password" | OAuthProvider | null>(
-    null,
-  );
+  /** The password sign-in only. `OAuthButtons` tracks its own redirects. */
+  const [pending, setPending] = useState(false);
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPending("password");
+    setPending(true);
     setError(null);
 
     try {
@@ -47,22 +40,7 @@ export function LoginForm({
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "An error occurred");
     } finally {
-      setPending(null);
-    }
-  };
-
-  const handleOAuthLogin = async (provider: OAuthProvider) => {
-    setPending(provider);
-    setError(null);
-
-    try {
-      await signInWithProvider(provider);
-      // No success branch: the call navigates to the provider. The button stays in
-      // its pending state until the browser leaves, so clearing it here would only
-      // flash the original label back at the user mid-redirect.
-    } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "An error occurred");
-      setPending(null);
+      setPending(false);
     }
   };
 
@@ -108,50 +86,11 @@ export function LoginForm({
                 />
               </div>
               {error && <p className="text-sm text-red-500">{error}</p>}
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={pending !== null}
-              >
-                {pending === "password" ? "Logging in..." : "Login"}
+              <Button type="submit" className="w-full" disabled={pending}>
+                {pending ? "Signing in…" : "Sign in"}
               </Button>
 
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="h-px flex-1 bg-border" />
-                or
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
-              {/* Inside the form, so both need an explicit type: a bare button
-                  submits the email and password instead. */}
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={pending !== null}
-                onClick={() => handleOAuthLogin("google")}
-              >
-                <GoogleIcon />
-                {pending === "google"
-                  ? "Redirecting to Google…"
-                  : "Sign in with Google"}
-              </Button>
-
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={pending !== null}
-                onClick={() => handleOAuthLogin("github")}
-              >
-                {/* GitHub's mark is monochrome by design, so lucide's icon is the
-                    real thing rather than an approximation — unlike Google's, which
-                    needs its four colours and lives in its own component. */}
-                <Github size={16} aria-hidden />
-                {pending === "github"
-                  ? "Redirecting to GitHub…"
-                  : "Sign in with GitHub"}
-              </Button>
+              <OAuthButtons verb="Sign in" />
             </div>
             <div className="mt-4 text-center text-sm">
               Don&apos;t have an account?{" "}

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
 import { signUp } from "@/lib/db/auth-browser";
 import { Button } from "@/components/ui/button";
+import { OAuthButtons } from "@/components/oauth-buttons";
 import {
   Card,
   CardContent,
@@ -102,13 +103,18 @@ export function SignUpForm({
               </div>
               {error && <p className="text-sm text-red-500">{error}</p>}
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Creating an account..." : "Sign up"}
+                {isLoading ? "Creating an account…" : "Sign up"}
               </Button>
+
+              {/* The same call as on the sign-in page, and deliberately so: a
+                  provider account is created the first time it is used, so there is
+                  no separate registration to build. Only the wording changes. */}
+              <OAuthButtons verb="Sign up" />
             </div>
             <div className="mt-4 text-center text-sm">
               Already have an account?{" "}
               <Link href="/auth/login" className="underline underline-offset-4">
-                Login
+                Sign in
               </Link>
             </div>
           </form>
