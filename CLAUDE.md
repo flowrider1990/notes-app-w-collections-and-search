@@ -26,8 +26,10 @@ Three things a user can be doing, and nothing else:
 | Route | Who | What |
 | --- | --- | --- |
 | `/` | signed out | Landing page: what the app is, and a Sign in button. Reads no cookies, so it stays static. A signed-in visitor is redirected to `/notes` by `lib/supabase/proxy.ts`. |
-| `/auth/login`, `/auth/sign-up`, `/auth/sign-up-success` | signed out | Email/password and Google sign-in; self-service sign-up. |
-| `/auth/callback`, `/auth/confirm`, `/auth/error` | signed out | Route handlers for the OAuth code exchange and email confirmation, plus one page to land failures on. |
+| `/auth/login`, `/auth/sign-up`, `/auth/sign-up-success` | signed out | Email/password, Google and GitHub sign-in; self-service sign-up. |
+| `/auth/forgot-password` | signed out | Asks Supabase to email a reset link. |
+| `/auth/update-password` | **signed in** | Sets a new password. Gated with `requireUser()` — the recovery link is what grants the session, and `updateUser` acts on the signed-in user, so an expired link must redirect rather than show a form. |
+| `/auth/callback`, `/auth/confirm`, `/auth/error` | signed out | Route handlers for the OAuth code exchange and email links, plus one page to land failures on. |
 | `/notes`, `/notes/[id]` | signed in | The workspace. This is the app. |
 | `/share/[token]` | anyone | One shared collection, read-only. See "Shared collections". |
 
@@ -37,12 +39,26 @@ links to another page.
 
 **Do not add pages.** The starter's `/protected` demo page, its tutorial components, its hero and
 its deploy button were deleted deliberately — if a route does not help someone read or write a
-note, it does not belong. Password reset (`/auth/forgot-password`, `/auth/update-password`) was
-removed for the same reason: accounts are made in the Supabase dashboard, so the flow was reachable
-but pointless. Restoring it means restoring both pages and the link in `components/login-form.tsx`.
+note, it does not belong.
+
+Password reset was deleted on that reasoning too, then brought back, and the difference is worth
+recording: it was pointless while every account was made in the Supabase dashboard, and became
+necessary once people could register themselves — a user who signs up can lock themselves out. The
+two pages and the link in `components/login-form.tsx` came back out of `b61e013^`.
 
 Where a signed-in user lands is `AFTER_SIGN_IN_PATH` in `lib/auth-redirect.ts`, read by the login
-form, the OAuth callback and the sign-up confirmation email. Change it in that one place.
+form, the OAuth callback, the sign-up confirmation email and the update-password form. `safeNextPath`
+sits beside it: both auth route handlers take a `?next=` from an email or a provider, so both need
+the same in-app-path-only guard against an open redirect.
+
+**Email links arrive in two shapes**, and `/auth/confirm` handles both, because which one turns up
+depends on the email template configured in the dashboard rather than on anything in this codebase.
+The documented templates send a `token_hash`, verified with `verifyOtp`, and work from any device.
+The default `{{ .ConfirmationURL }}` template sends a `code`, exchanged with
+`exchangeCodeForSession` — and that path needs the PKCE verifier cookie, so the link only works in
+the browser that requested it. Opening a reset email on a phone fails until the documented templates
+are pasted in. Do not "simplify" the route down to one branch without checking which template the
+project is on.
 
 ## Stack
 
@@ -114,7 +130,9 @@ errors. Do **not** run `npm run dev` in a tool call; it never exits and will han
    own.** No password column, no hashing, no salting, no credential storage, and no session
    invented in application code. Signing in, signing out, session refresh, email confirmation and
    password reset are all `supabase.auth.*` calls — `signInWithPassword`, `signInWithOAuth`,
-   `updateUser`, `resetPasswordForEmail`, `signOut`. The only local logic allowed near a password is
+   `updateUser`, `resetPasswordForEmail`, `signOut` — and every one of them is wrapped in
+   `lib/db/auth-browser.ts` so no component builds a Supabase client (rule 3). Providers go through
+   one `signInWithProvider()`; adding another is a line in its `OAuthProvider` type. The only local logic allowed near a password is
    form validation, like the "passwords match" comparison in `components/sign-up-form.tsx`. Nothing
    may write a password to `localStorage`, `sessionStorage`, a cookie or a log — and note that no
    note data may live in web storage either: Supabase is the only persistence layer in this project.
