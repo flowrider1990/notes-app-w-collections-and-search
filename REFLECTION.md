@@ -7,7 +7,32 @@ delete unused headings without checking whether they were required.
 
 ## Persistence decision
 
-*Which mechanism, and why. Cross-reference `docs/decisions.md`.*
+**Chosen: Supabase Postgres, reached through `@supabase/ssr` and confined to `lib/db/`.**
+
+Web storage was never a candidate — the brief rules out `localStorage` and `sessionStorage`
+outright, and for good reason: neither can be scoped to a user, queried, or read from the server,
+so a second account on the same browser would see the first account's notes.
+
+The real choice was between Supabase and standing up a separate database. Supabase won on one
+argument above the others: the project already used it for authentication, which means
+`auth.uid()` is available inside the database, and that lets Row Level Security enforce ownership
+one layer below the application. A query for "my notes" carries no `user_id` filter anywhere in
+`lib/db/index.ts` — the database refuses to return anyone else's rows even if the application
+forgets to ask correctly. Putting the security boundary under the app instead of inside it is
+worth more than any convenience.
+
+Two consequences followed from that and are worth recording:
+
+- **A failed read looks like an empty table.** RLS returns `[]` with `error: null` when no policy
+  matches, so "no notes" and "not allowed" are the same response. That is why `requireUser()`
+  exists and why every helper checks `error` explicitly — an unauthorised read must never be
+  allowed to pass itself off as an empty workspace.
+- **Search stayed in the database.** Because the notes already live in Postgres, full-text search
+  is a generated `tsvector` column with a GIN index rather than a scan in JavaScript. Under web
+  storage that feature would have meant matching substrings over every note in memory.
+
+The alternative — a database of my own plus hand-rolled sign-in — would have meant two systems to
+secure and custom password handling, which the project rules forbid outright.
 
 ---
 

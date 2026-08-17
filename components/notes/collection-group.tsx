@@ -8,6 +8,7 @@ import {
   setNoteCollectionAction,
 } from "@/app/notes/actions";
 import { NoteCard } from "@/components/notes/note-card";
+import { ShareCollection } from "@/components/notes/share-collection";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { Note } from "@/lib/db";
@@ -28,6 +29,12 @@ type CollectionGroupProps = {
    * null` bucket rather than a row, so it has no id and cannot be renamed.
    */
   collectionId?: string;
+  /**
+   * The collection's share token, or null when private. Only meaningful alongside
+   * `collectionId` — the Uncollected and Archive sections are views, not rows, and
+   * cannot be shared.
+   */
+  shareToken?: string | null;
   /**
    * Whether a dragged note can be dropped here to join this collection. The
    * "Archive" section reuses this component and must set it false: it has no
@@ -61,6 +68,7 @@ export function CollectionGroup({
   totalCount,
   emptyMessage,
   collectionId,
+  shareToken = null,
   droppable = true,
   defaultExpanded = false,
   forceExpanded = false,
@@ -74,7 +82,6 @@ export function CollectionGroup({
   const [dropError, setDropError] = useState<string | null>(null);
 
   const expanded = forceExpanded || open;
-  const renameable = collectionId !== undefined;
 
   /**
    * The collection a dropped note lands in. `undefined` is the "Uncollected"
@@ -249,15 +256,26 @@ export function CollectionGroup({
           {totalCount}
         </span>
 
-        {renameable ? (
-          <button
-            type="button"
-            onClick={beginEdit}
-            aria-label={`Rename collection ${name}`}
-            className="rounded p-1 opacity-0 transition-opacity hover:bg-background focus:opacity-100 group-hover:opacity-100"
-          >
-            <Pencil size={14} aria-hidden />
-          </button>
+        {/* Only a real collection row can be renamed or shared — "Uncollected" and
+            "Archive" are views. Compared inline rather than via a hoisted boolean
+            so TypeScript narrows `collectionId` to a string in here. */}
+        {collectionId !== undefined ? (
+          <>
+            <button
+              type="button"
+              onClick={beginEdit}
+              aria-label={`Rename collection ${name}`}
+              className="rounded p-1 opacity-0 transition-opacity hover:bg-background focus:opacity-100 group-hover:opacity-100"
+            >
+              <Pencil size={14} aria-hidden />
+            </button>
+
+            <ShareCollection
+              collectionId={collectionId}
+              name={name}
+              shareToken={shareToken}
+            />
+          </>
         ) : null}
       </div>
 

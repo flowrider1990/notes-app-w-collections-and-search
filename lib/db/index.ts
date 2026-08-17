@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { toTsQuery } from "@/lib/search-query";
 import { pickTagColor } from "@/lib/tag-colors";
 
 /**
@@ -24,7 +25,21 @@ export type Tag = {
 export type Collection = {
   id: string;
   name: string;
+  /** Null when private. Non-null makes the collection readable by link. */
+  share_token: string | null;
   created_at: string;
+};
+
+/** A shared collection as an anonymous visitor sees it: a name and bare notes. */
+export type SharedCollection = {
+  name: string;
+  notes: { id: string; title: string; body: string }[];
+};
+
+/** One recorded search, most recently used first. */
+export type SearchHistoryEntry = {
+  query: string;
+  searched_at: string;
 };
 
 export type Note = {
@@ -43,6 +58,8 @@ export type Note = {
 
 const NOTE_COLUMNS =
   "id, collection_id, title, body, pinned, archived, created_at, updated_at, note_tags(tags(id, name, color))";
+
+const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 
 type NoteRow = Omit<Note, "tags"> & {
   note_tags: { tags: Tag | Tag[] | null }[] | null;
@@ -94,6 +111,40 @@ export async function getNotes(): Promise<Note[]> {
   return ((data ?? []) as unknown as NoteRow[]).map(toNote);
 }
 
+/**
+ * Notes matching a full-text search over title and body, ordered exactly like
+ * `getNotes` — pinned first, then newest — so every caller's assumptions hold.
+ *
+ * Returns `null` when the input has no searchable tokens, which means "no search",
+ * not "no matches". The caller shows the unfiltered list instead of an empty one.
+ *
+ * The query string comes from `toTsQuery`, which strips tsquery operators: raw
+ * user text reaching `to_tsquery` raises Postgres 42601 rather than matching
+ * nothing. Omitting `type` is what makes supabase-js emit a raw `to_tsquery`,
+ * which the trailing `:*` prefix depends on — `websearch` would ignore it. The
+ * `config` must stay 'english' to match the generated column, or the stems will
+ * not line up and nothing will ever match.
+ */
+export async function searchNotes(query: string): Promise<Note[] | null> {
+  const tsQuery = toTsQuery(query);
+  if (!tsQuery) return null;
+
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("notes")
+    .select(NOTE_COLUMNS)
+    .textSearch("search_vector", tsQuery, { config: "english" })
+    .order("pinned", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(`Could not search notes: ${error.message}`);
+  }
+
+  return ((data ?? []) as unknown as NoteRow[]).map(toNote);
+}
+
 /** A single note with its tags, or null when no such note is visible. */
 export async function getNote(id: string): Promise<Note | null> {
   const supabase = await createClient();
@@ -116,7 +167,7 @@ export async function getCollections(): Promise<Collection[]> {
 
   const { data, error } = await supabase
     .from("collections")
-    .select("id, name, created_at")
+    .select(COLLECTION_COLUMNS)
     .order("name", { ascending: true });
 
   if (error) {
@@ -148,7 +199,7 @@ export async function createCollection(name: string): Promise<Collection> {
   const { data, error } = await supabase
     .from("collections")
     .insert({ name })
-    .select("id, name, created_at")
+    .select(COLLECTION_COLUMNS)
     .single();
 
   if (error) {
@@ -188,6 +239,94 @@ export async function renameCollection(id: string, name: string): Promise<void> 
       throw new Error(`You already have a collection called "${trimmed}".`);
     }
     throw new Error(`Could not rename collection: ${error.message}`);
+  }
+}
+
+/**
+ * Creates an empty note and returns it, so the caller can navigate straight to
+ * the new id.
+ *
+ * Nothing but the collection is passed: `title` and `body` are `not null default
+ * ''` and `user_id` defaults to `auth.uid()`, so the database supplies the rest.
+ * An untitled note is a deliberate starting point — the editor is where a note
+ * gets its title, and demanding one up front would put a dialog in front of every
+ * new note.
+ */
+export async function createNote(
+  collectionId: string | null = null,
+): Promise<Note> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("notes")
+    .insert({ collection_id: collectionId })
+    .select(NOTE_COLUMNS)
+    .single();
+
+  if (error) {
+    throw new Error(`Could not create note: ${error.message}`);
+  }
+
+  return toNote(data as unknown as NoteRow);
+}
+
+/**
+ * Saves a note's title and body. The only write that touches the text itself —
+ * everything else here changes a note's metadata.
+ *
+ * `.select("id")` is what turns "no such note" into an error. RLS makes an update
+ * to a row this user cannot see look exactly like success: zero rows affected,
+ * `error: null`. Reading back what was written is the only way to tell the two
+ * apart, and silently discarding someone's typing is the worst possible failure
+ * mode for an editor.
+ */
+export async function updateNote(
+  id: string,
+  fields: { title: string; body: string },
+): Promise<void> {
+  const supabase = await createClient();
+
+  // `updated_at` is maintained by a database trigger — never set it here.
+  const { data, error } = await supabase
+    .from("notes")
+    .update({ title: fields.title, body: fields.body })
+    .eq("id", id)
+    .select("id");
+
+  if (error) {
+    throw new Error(`Could not save note: ${error.message}`);
+  }
+
+  if ((data ?? []).length === 0) {
+    throw new Error("Could not save note: it no longer exists.");
+  }
+}
+
+/**
+ * Deletes a note for good. `archived` is the reversible option; this is not.
+ *
+ * The note's `note_tags` rows go with it — that foreign key cascades — so a tag
+ * is never left pointing at a note that is gone. The tags themselves survive,
+ * since they belong to the user rather than to one note.
+ *
+ * Reads back the id for the same reason as `updateNote`: without it a delete that
+ * matched nothing is indistinguishable from one that worked.
+ */
+export async function deleteNote(id: string): Promise<void> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("notes")
+    .delete()
+    .eq("id", id)
+    .select("id");
+
+  if (error) {
+    throw new Error(`Could not delete note: ${error.message}`);
+  }
+
+  if ((data ?? []).length === 0) {
+    throw new Error("Could not delete note: it no longer exists.");
   }
 }
 
@@ -324,5 +463,172 @@ export async function removeTagFromNote(
 
   if (error) {
     throw new Error(`Could not remove tag: ${error.message}`);
+  }
+}
+
+/**
+ * Makes a collection readable by anyone holding the returned token.
+ *
+ * The token is generated here with `crypto.randomUUID()` rather than by the
+ * database, because supabase-js has no way to put a `gen_random_uuid()` call into
+ * an update. It is a v4 uuid from the platform CSPRNG, so it is not guessable.
+ *
+ * Re-sharing an already shared collection issues a fresh token, which invalidates
+ * the previous link.
+ */
+export async function shareCollection(id: string): Promise<string> {
+  const supabase = await createClient();
+  const token = crypto.randomUUID();
+
+  const { error } = await supabase
+    .from("collections")
+    .update({ share_token: token })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Could not share collection: ${error.message}`);
+  }
+
+  return token;
+}
+
+/** Revokes sharing. Every link handed out for this collection stops working. */
+export async function unshareCollection(id: string): Promise<void> {
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("collections")
+    .update({ share_token: null })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Could not stop sharing collection: ${error.message}`);
+  }
+}
+
+/**
+ * A shared collection, readable without a session. Returns null for an unknown or
+ * revoked token.
+ *
+ * Goes through the `shared_collection` Postgres function rather than a table
+ * select, because RLS scopes `collections` and `notes` to `auth.uid()` and an
+ * anonymous visitor has none. The function is `security definer` and takes the
+ * token as an argument, so it exposes exactly one collection to whoever holds the
+ * link and nothing to anyone who does not. See section 6 of docs/schema.sql.
+ *
+ * Zero rows means the token does not match. A single row with a null `note_id`
+ * means the collection is shared but empty — that is what the function's left join
+ * is for, and why the note rows are filtered rather than trusted.
+ */
+export async function getSharedCollection(
+  token: string,
+): Promise<SharedCollection | null> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.rpc("shared_collection", { token });
+
+  if (error) {
+    throw new Error(`Could not load shared collection: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as {
+    collection_name: string;
+    note_id: string | null;
+    note_title: string | null;
+    note_body: string | null;
+  }[];
+
+  if (rows.length === 0) return null;
+
+  return {
+    name: rows[0].collection_name,
+    notes: rows
+      .filter((row) => row.note_id !== null)
+      .map((row) => ({
+        id: row.note_id as string,
+        title: row.note_title ?? "",
+        body: row.note_body ?? "",
+      })),
+  };
+}
+
+/** The most recently used searches, newest first. */
+export async function getSearchHistory(
+  limit = 8,
+): Promise<SearchHistoryEntry[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("search_history")
+    .select("query, searched_at")
+    .order("searched_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Could not load search history: ${error.message}`);
+  }
+
+  return (data ?? []) as SearchHistoryEntry[];
+}
+
+/**
+ * Records a search, or bumps it to the top if it has been run before.
+ *
+ * `user_id` is not passed — it defaults to `auth.uid()` in the database — while the
+ * conflict target is `(user_id, query)`. The default is applied before conflict
+ * resolution, so this works, but it is the one mechanism here worth confirming
+ * against the real database rather than assuming.
+ *
+ * `searched_at` is set explicitly because `default now()` only applies to the
+ * insert; on the update path the row would otherwise keep its original timestamp
+ * and never move up the list.
+ */
+export async function recordSearch(query: string): Promise<void> {
+  const supabase = await createClient();
+  const trimmed = query.trim();
+
+  if (!trimmed) return;
+
+  const { error } = await supabase.from("search_history").upsert(
+    { query: trimmed, searched_at: new Date().toISOString() },
+    { onConflict: "user_id,query" },
+  );
+
+  if (error) {
+    throw new Error(`Could not record search: ${error.message}`);
+  }
+}
+
+/** Forgets one recorded search. */
+export async function removeSearchHistoryEntry(query: string): Promise<void> {
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("search_history")
+    .delete()
+    .eq("query", query);
+
+  if (error) {
+    throw new Error(`Could not remove search: ${error.message}`);
+  }
+}
+
+/**
+ * Clears the whole history.
+ *
+ * PostgREST refuses an unfiltered delete, so this filters on `query is not null` —
+ * true for every row, since the column is `not null`. RLS still scopes the delete
+ * to this user, so "every row" means every row of theirs.
+ */
+export async function clearSearchHistory(): Promise<void> {
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("search_history")
+    .delete()
+    .not("query", "is", null);
+
+  if (error) {
+    throw new Error(`Could not clear search history: ${error.message}`);
   }
 }

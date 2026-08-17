@@ -2,19 +2,40 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireUser } from "@/lib/db/auth";
 import {
   addTagToNote,
+  clearSearchHistory,
   createCollection,
+  createNote,
+  deleteNote,
+  recordSearch,
+  removeSearchHistoryEntry,
   removeTagFromNote,
   renameCollection,
+  searchNotes,
   setNoteArchived,
   setNoteCollection,
   setNotePinned,
+  shareCollection,
+  unshareCollection,
+  updateNote,
+  type Note,
 } from "@/lib/db";
 
 /**
  * Server Actions for every workspace mutation. Each one delegates to `lib/db`
  * and holds no query of its own.
+ *
+ * Every action opens with `await requireUser()`. A Server Action is a POST endpoint
+ * that anyone holding its id can call, and the page gate does not cover it — RLS
+ * would deny the write, but only after the request has been let through, and a
+ * denied query returns "could not save" rather than sending the visitor to sign in.
+ *
+ * That call always sits **before** the `try`, never inside it. `requireUser()`
+ * redirects by throwing, and every `catch` in this file turns a throw into
+ * `{ error }` — catching the redirect would swallow it and report the internal
+ * `NEXT_REDIRECT` marker to the user as a failure message.
  *
  * All of them revalidate with the "layout" type. The workspace data — notes,
  * collections and tags — is fetched in `app/notes/layout.tsx`, and the default
@@ -40,7 +61,75 @@ function failure(cause: unknown, fallback: string): ActionResult {
   return { error: cause instanceof Error ? cause.message : fallback };
 }
 
+/**
+ * Creates an empty note and hands back its id so the caller can open it.
+ *
+ * Returns the id rather than redirecting here. `redirect()` works by throwing, and
+ * the `catch` below would treat that as a failed create and report the internal
+ * `NEXT_REDIRECT` marker as an error message — the same trap the guards avoid.
+ * Navigation belongs to the component that knows where the user should land.
+ */
+export async function createNoteAction(
+  collectionId: string | null = null,
+): Promise<{ error: string | null; id: string | null }> {
+  await requireUser();
+
+  let note: Note;
+
+  try {
+    note = await createNote(collectionId);
+  } catch (cause) {
+    return { ...failure(cause, "Could not create the note."), id: null };
+  }
+
+  revalidateWorkspace();
+  return { error: null, id: note.id };
+}
+
+/**
+ * Saves a note's title and body.
+ *
+ * Trims neither: leading whitespace in a body is often deliberate, and a title the
+ * user padded is theirs to pad. Empty is allowed too — `title` and `body` are
+ * `not null default ''`, and a note with no title renders as "(untitled)".
+ */
+export async function updateNoteAction(
+  id: string,
+  title: string,
+  body: string,
+): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await updateNote(id, { title, body });
+  } catch (cause) {
+    return failure(cause, "Could not save the note.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Deletes a note permanently. Archiving is the reversible option — see
+ * `setNoteArchivedAction`.
+ */
+export async function deleteNoteAction(id: string): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await deleteNote(id);
+  } catch (cause) {
+    return failure(cause, "Could not delete the note.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
 export async function createCollectionAction(name: string): Promise<ActionResult> {
+  await requireUser();
+
   const trimmed = name.trim();
   if (!trimmed) return { error: "A collection needs a name." };
 
@@ -58,6 +147,8 @@ export async function renameCollectionAction(
   id: string,
   name: string,
 ): Promise<ActionResult> {
+  await requireUser();
+
   const trimmed = name.trim();
   if (!trimmed) return { error: "A collection needs a name." };
 
@@ -83,6 +174,8 @@ export async function setNoteCollectionAction(
   noteId: string,
   collectionId: string | null,
 ): Promise<ActionResult> {
+  await requireUser();
+
   try {
     await setNoteCollection(noteId, collectionId);
   } catch (cause) {
@@ -102,6 +195,8 @@ export async function setNotePinnedAction(
   noteId: string,
   pinned: boolean,
 ): Promise<ActionResult> {
+  await requireUser();
+
   try {
     await setNotePinned(noteId, pinned);
   } catch (cause) {
@@ -117,6 +212,8 @@ export async function setNoteArchivedAction(
   noteId: string,
   archived: boolean,
 ): Promise<ActionResult> {
+  await requireUser();
+
   try {
     await setNoteArchived(noteId, archived);
   } catch (cause) {
@@ -130,7 +227,119 @@ export async function setNoteArchivedAction(
   return { error: null };
 }
 
+/**
+ * Full-text search. A read rather than a mutation, which is unusual for this file,
+ * so: the sidebar is a client component and the workspace data is fetched in
+ * `app/notes/layout.tsx` — and layouts are not given `searchParams`, because they
+ * do not re-render on navigation and the value would go stale. A `?q=` parameter
+ * therefore cannot reach the fetch, and the client has to ask for results.
+ *
+ * No revalidation: nothing changed.
+ *
+ * `null` means the query held nothing searchable, which the caller renders as "no
+ * search active" rather than "no matches".
+ */
+export async function searchNotesAction(
+  query: string,
+): Promise<{ error: string | null; notes: Note[] | null }> {
+  await requireUser();
+
+  try {
+    return { error: null, notes: await searchNotes(query) };
+  } catch (cause) {
+    return { ...failure(cause, "Could not search notes."), notes: null };
+  }
+}
+
+/**
+ * Shares a collection and hands back the token so the caller can show the link.
+ * Returns the token instead of the plain `ActionResult` the other actions use.
+ */
+export async function shareCollectionAction(
+  id: string,
+): Promise<{ error: string | null; token: string | null }> {
+  await requireUser();
+
+  let token: string;
+
+  try {
+    token = await shareCollection(id);
+  } catch (cause) {
+    return { ...failure(cause, "Could not share the collection."), token: null };
+  }
+
+  revalidateWorkspace();
+  return { error: null, token };
+}
+
+/** Revokes sharing, invalidating every link already handed out. */
+export async function unshareCollectionAction(id: string): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await unshareCollection(id);
+  } catch (cause) {
+    return failure(cause, "Could not stop sharing the collection.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Records a search in the history.
+ *
+ * Called only when a search is committed — Enter, or picking a suggestion — never
+ * on the debounce tick. Search fires per keystroke, and a database write per
+ * keystroke is not defensible.
+ */
+export async function recordSearchAction(query: string): Promise<ActionResult> {
+  await requireUser();
+
+  const trimmed = query.trim();
+  if (!trimmed) return { error: null };
+
+  try {
+    await recordSearch(trimmed);
+  } catch (cause) {
+    return failure(cause, "Could not save the search.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+export async function removeSearchHistoryEntryAction(
+  query: string,
+): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await removeSearchHistoryEntry(query);
+  } catch (cause) {
+    return failure(cause, "Could not remove the search.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+export async function clearSearchHistoryAction(): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await clearSearchHistory();
+  } catch (cause) {
+    return failure(cause, "Could not clear the search history.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
 export async function addTagToNoteAction(noteId: string, name: string) {
+  await requireUser();
+
   const trimmed = name.trim();
   if (!trimmed) return;
 
@@ -139,6 +348,8 @@ export async function addTagToNoteAction(noteId: string, name: string) {
 }
 
 export async function removeTagFromNoteAction(noteId: string, tagId: string) {
+  await requireUser();
+
   await removeTagFromNote(noteId, tagId);
   revalidateWorkspace();
 }

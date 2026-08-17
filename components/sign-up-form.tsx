@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,7 +45,9 @@ export function SignUpForm({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/protected`,
+          // Where the confirmation link in the email leads. Same destination as
+          // every other way in, so it cannot drift from the sign-in forms.
+          emailRedirectTo: `${window.location.origin}${AFTER_SIGN_IN_PATH}`,
         },
       });
       if (error) throw error;

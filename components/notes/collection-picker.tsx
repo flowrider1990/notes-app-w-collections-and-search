@@ -57,7 +57,17 @@ export function CollectionPicker({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" disabled={pending}>
+          {/* `max-w-sm` matches the tag row below — a `max-w-xs` input plus the Add
+              button — so the two controls line up instead of this one running the
+              full width of the article. The width comes from a cap rather than a
+              fixed size because a flex column stretches its children by default,
+              and `justify-between` keeps the chevron on the right edge. */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            className="w-full max-w-sm justify-between"
+          >
             {current ? current.name : "Uncollected"}
             <ChevronDown size={16} className="ml-1" aria-hidden />
           </Button>

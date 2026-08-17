@@ -2,6 +2,8 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 
 import { CollectionPicker } from "@/components/notes/collection-picker";
+import { DeleteNote } from "@/components/notes/delete-note";
+import { NoteEditor } from "@/components/notes/note-editor";
 import { TagEditor } from "@/components/notes/tag-editor";
 import { getCollections, getNote } from "@/lib/db";
 import { requireUser } from "@/lib/db/auth";
@@ -11,8 +13,12 @@ type NotePageProps = {
 };
 
 /**
- * Title and body are read-only here — this pass covers assigning a collection
- * and editing tags, not authoring text.
+ * The note itself: title and body in an editor, then its collection, its tags, and
+ * the delete control.
+ *
+ * The text is editable client-side while everything below the rule is a separate
+ * control writing straight through its own Server Action — so a note's metadata
+ * changes without going near the unsaved state of the editor above it.
  */
 async function NoteDetail({ params }: NotePageProps) {
   const { id } = await params;
@@ -26,25 +32,29 @@ async function NoteDetail({ params }: NotePageProps) {
 
   return (
     <article className="flex max-w-2xl flex-col gap-6">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-bold">{note.title || "(untitled)"}</h1>
-      </header>
+      {/* Keyed by id so switching notes resets the editor's state. Without it
+          React reuses the component across the navigation and the previous note's
+          unsaved text would appear under the new note's title. */}
+      <NoteEditor
+        key={note.id}
+        noteId={note.id}
+        initialTitle={note.title}
+        initialBody={note.body}
+      >
+        <hr />
 
-      {note.body ? (
-        <p className="whitespace-pre-wrap">{note.body}</p>
-      ) : (
-        <p className="text-sm text-muted-foreground">This note has no body.</p>
-      )}
+        <CollectionPicker
+          noteId={note.id}
+          collections={collections}
+          currentCollectionId={note.collection_id}
+        />
+
+        <TagEditor noteId={note.id} tags={note.tags} />
+      </NoteEditor>
 
       <hr />
 
-      <CollectionPicker
-        noteId={note.id}
-        collections={collections}
-        currentCollectionId={note.collection_id}
-      />
-
-      <TagEditor noteId={note.id} tags={note.tags} />
+      <DeleteNote noteId={note.id} title={note.title} />
     </article>
   );
 }
