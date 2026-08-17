@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 
 import { setNoteCollectionAction } from "@/app/notes/actions";
 import { Button } from "@/components/ui/button";
+import { SectionLabel } from "@/components/ui/section-label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,9 +52,7 @@ export function CollectionPicker({
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs font-semibold uppercase text-muted-foreground">
-        Collection
-      </p>
+      <SectionLabel>Collection</SectionLabel>
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

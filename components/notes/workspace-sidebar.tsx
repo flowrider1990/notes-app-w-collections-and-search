@@ -10,6 +10,7 @@ import { NewNote } from "@/components/notes/new-note";
 import { SearchHistory } from "@/components/notes/search-history";
 import { TagPill } from "@/components/notes/tag-pill";
 import { Input } from "@/components/ui/input";
+import { SectionLabel } from "@/components/ui/section-label";
 import { cn } from "@/lib/utils";
 import type { Collection, Note, SearchHistoryEntry, Tag } from "@/lib/db";
 
@@ -163,8 +164,8 @@ export function WorkspaceSidebar({
   const uncollected = filteredActive.filter((note) => note.collection_id === null);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-7">
+      <div className="flex flex-col gap-2">
         <div className="relative">
           <Search
             size={16}
@@ -188,7 +189,9 @@ export function WorkspaceSidebar({
         </div>
 
         {searching ? (
-          <p className="px-1 text-xs text-muted-foreground">Searching…</p>
+          <p className="px-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+            Searching…
+          </p>
         ) : null}
 
         {searchError ? (
@@ -201,9 +204,7 @@ export function WorkspaceSidebar({
       </div>
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">
-          Tags
-        </p>
+        <SectionLabel>Tags</SectionLabel>
         {tags.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No tags yet. Open a note to add one.

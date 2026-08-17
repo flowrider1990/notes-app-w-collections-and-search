@@ -32,7 +32,7 @@ async function NoteDetail({ params }: NotePageProps) {
   if (!note) notFound();
 
   return (
-    <article className="flex max-w-2xl flex-col gap-6">
+    <article className="flex max-w-2xl flex-col gap-8">
       {/* Keyed by id so switching notes resets the editor's state. Without it
           React reuses the component across the navigation and the previous note's
           unsaved text would appear under the new note's title. */}

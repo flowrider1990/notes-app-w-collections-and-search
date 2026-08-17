@@ -34,7 +34,10 @@ export function TagPill({
       className={cn(
         badgeVariants({ variant: "outline" }),
         tagPillClasses(tag.color),
-        selected && "ring-2 ring-ring ring-offset-1",
+        // Ink, not the accent blue: the ring marks "filtering by this" while the
+        // pill keeps its own colour, and the blue ring stays reserved for keyboard
+        // focus so the two states never look alike.
+        selected && "ring-2 ring-foreground/25 ring-offset-1 ring-offset-background",
         className,
       )}
     >

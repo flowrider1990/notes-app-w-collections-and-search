@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { SharedCollectionSkeleton } from "@/components/notes/shared-collection-skeleton";
 import { getSharedCollection } from "@/lib/db";
+import { SectionLabel } from "@/components/ui/section-label";
 
 type SharePageProps = {
   params: Promise<{ token: string }>;
@@ -29,16 +30,12 @@ async function SharedCollection({ params }: SharePageProps) {
   if (!shared) notFound();
 
   return (
-    <article className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
-      <header className="flex flex-col gap-1 border-b pb-4">
-        <p className="text-xs font-semibold uppercase text-muted-foreground">
-          Shared collection
-        </p>
-        <h1 className="text-2xl font-bold">{shared.name}</h1>
-        <p className="text-sm text-muted-foreground">
-          {shared.notes.length === 1
-            ? "1 note"
-            : `${shared.notes.length} notes`}
+    <article className="mx-auto flex max-w-2xl flex-col gap-10 px-6 py-14">
+      <header className="flex flex-col gap-2 border-b pb-6">
+        <SectionLabel>Shared collection</SectionLabel>
+        <h1 className="text-3xl font-semibold tracking-tight">{shared.name}</h1>
+        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+          {shared.notes.length === 1 ? "1 note" : `${shared.notes.length} notes`}
         </p>
       </header>
 
@@ -49,12 +46,19 @@ async function SharedCollection({ params }: SharePageProps) {
       ) : (
         <div className="flex flex-col gap-4">
           {shared.notes.map((note) => (
-            <section key={note.id} className="rounded-md border p-4">
-              <h2 className="font-medium">{note.title || "(untitled)"}</h2>
+            <section
+              key={note.id}
+              className="rounded-lg border bg-card p-5 transition-colors duration-150 hover:border-foreground/15"
+            >
+              <h2 className="font-medium tracking-tight">
+                {note.title || "(untitled)"}
+              </h2>
               {note.body ? (
-                <p className="mt-2 whitespace-pre-wrap text-sm">{note.body}</p>
+                <p className="mt-2.5 whitespace-pre-wrap text-[15px] leading-7">
+                  {note.body}
+                </p>
               ) : (
-                <p className="mt-2 text-sm text-muted-foreground">
+                <p className="mt-2.5 text-sm text-muted-foreground">
                   This note has no body.
                 </p>
               )}

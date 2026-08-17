@@ -56,20 +56,22 @@ export function NoteCard({ note }: { note: Note }) {
     <div
       draggable
       onDragStart={onDragStart}
-      className="group rounded-md border p-3 transition-colors hover:bg-accent"
+      className="group rounded-lg border bg-card p-3.5 transition-colors duration-150 hover:border-foreground/15 hover:bg-accent"
     >
       <div className="flex items-start gap-1">
         <Link href={`/notes/${note.id}`} className="min-w-0 flex-1">
-          <h3 className="font-medium">{note.title || "(untitled)"}</h3>
+          <h3 className="truncate text-sm font-medium tracking-tight">
+            {note.title || "(untitled)"}
+          </h3>
 
           {note.body ? (
-            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+            <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
               {note.body}
             </p>
           ) : null}
 
           {note.tags.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1">
+            <div className="mt-2.5 flex flex-wrap gap-1">
               {note.tags.map((tag) => (
                 <TagPill key={tag.id} tag={tag} />
               ))}
