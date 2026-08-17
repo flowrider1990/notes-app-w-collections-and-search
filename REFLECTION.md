@@ -48,10 +48,44 @@ never the branch actually used.
 
 ## Optional task #2 — Full-text search across note bodies
 
-**Branch:**
-**PR:**
+**Branch:** `feature/notes-foundation`
+**PR:** #2
 
-*Bonus criterion. What was built and why this approach over title-only search.*
+Search runs in Postgres. `notes.search_vector` is a generated `tsvector` over title and body with a
+GIN index behind it, and the sidebar's search box queries it through a Server Action —
+`searchNotes()` in `lib/db/index.ts` — so the database returns only the matching rows. Nothing is
+filtered in the browser.
+
+**Why not `ilike '%term%'`.** It cannot use an index, so every search reads every row; and it matches
+substrings rather than words, so "cat" hits "category". A `tsvector` gives real word matching with
+stemming, which is what makes searching "shopping" find a note that says "shop".
+
+Three things were not obvious:
+
+- **Raw user input cannot reach `to_tsquery`.** The characters `& | ! ( ) : * < >` are operators, so a
+  lone apostrophe raises Postgres `42601` — a syntax error, not an empty result. Search would break
+  on punctuation rather than quietly find nothing. `toTsQuery()` in `lib/search-query.ts` reduces the
+  input to alphanumeric tokens instead of escaping character by character, which removes the whole
+  class of failure.
+- **Full-text search matches whole words, which breaks search-as-you-type.** With the stemmer,
+  "shopping" is indexed as "shop", so typing "shopp" finds nothing until the word is complete. The
+  last token gets a `:*` prefix marker; the earlier ones are already typed out.
+- **The `'english'` config has to be identical on both sides.** The generated column and the query
+  both name it. Build the vector with one configuration and query with another and the stems never
+  line up, so nothing matches — and there is no error to tell you why.
+
+**Where the line falls.** Text search is server-side; the tag filter is not. The sidebar already
+holds the note list in memory to render it, tags come down with each note in the same round trip, and
+comparing ids in the client makes a tag toggle instant. Sending a query per tag click would be a
+round trip to compute something already on hand. Both facts are worth stating plainly rather than
+implying the whole sidebar is server-filtered.
+
+**Evidence.** `explain analyze` of the search predicate reports
+`Filter: (search_vector @@ '''test'':*'::tsquery)` with `Rows Removed by Filter: 4` — the database
+does the filtering. The planner picks a sequential scan at this table size, which is correct for
+seven rows; with `enable_seqscan = off` it switches to
+`Bitmap Index Scan on notes_search_vector_idx`, so the index is present and is what it will use once
+the table is large enough to matter.
 
 ---
 
