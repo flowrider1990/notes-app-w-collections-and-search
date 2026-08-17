@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { LogoutButton } from "@/components/logout-button";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { WorkspaceSidebar } from "@/components/notes/workspace-sidebar";
+import { WorkspaceSkeleton } from "@/components/notes/workspace-skeleton";
 import {
   getCollections,
   getNotes,
@@ -59,11 +60,7 @@ export default function NotesLayout({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          <Suspense
-            fallback={
-              <p className="text-sm text-muted-foreground">Loading workspace…</p>
-            }
-          >
+          <Suspense fallback={<WorkspaceSkeleton />}>
             <Workspace />
           </Suspense>
         </div>

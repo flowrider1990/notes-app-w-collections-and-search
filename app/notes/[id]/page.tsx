@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { CollectionPicker } from "@/components/notes/collection-picker";
 import { DeleteNote } from "@/components/notes/delete-note";
 import { NoteEditor } from "@/components/notes/note-editor";
+import { NoteSkeleton } from "@/components/notes/note-skeleton";
 import { TagEditor } from "@/components/notes/tag-editor";
 import { getCollections, getNote } from "@/lib/db";
 import { requireUser } from "@/lib/db/auth";
@@ -66,9 +67,7 @@ async function NoteDetail({ params }: NotePageProps) {
  */
 export default function NotePage({ params }: NotePageProps) {
   return (
-    <Suspense
-      fallback={<p className="text-sm text-muted-foreground">Loading note…</p>}
-    >
+    <Suspense fallback={<NoteSkeleton />}>
       <NoteDetail params={params} />
     </Suspense>
   );
