@@ -27,10 +27,12 @@ create table if not exists public.collections (
 create unique index if not exists collections_share_token_key
   on public.collections (share_token);
 
--- `color` is one of a small fixed palette, assigned by application code when the
--- tag is first created. The check constraint keeps an unknown name out, since it
--- would render as an unstyled pill rather than failing visibly.
--- Added later by supabase/migrations/20260812111118_add_tag_color.sql.
+-- `color` is one of a fixed palette of ten. A new tag created from a note gets a
+-- colour hashed from its name; the sidebar's tag manager then lets the user pick
+-- any of them. The check constraint keeps an unknown name out, since it would
+-- render as an unstyled pill rather than failing visibly.
+-- Added by supabase/migrations/20260812111118_add_tag_color.sql and widened from
+-- six colours to ten by 20260818120415_expand_tag_palette.sql.
 --
 -- KEEP IN SYNC with TAG_COLORS in lib/tag-colors.ts. The list lives in both
 -- places and nothing enforces the pairing: adding a colour there without a
@@ -41,10 +43,26 @@ create table if not exists public.tags (
   user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
   name        text not null,
   color       text not null default 'slate'
-                check (color in ('slate', 'red', 'amber', 'green', 'blue', 'violet')),
+                check (
+                  color in ('slate', 'red', 'orange', 'amber', 'green',
+                            'teal', 'blue', 'indigo', 'violet', 'pink')
+                ),
   created_at  timestamptz not null default now(),
   unique (user_id, name)
 );
+
+-- The inline check above only applies when the table is created. On a database that
+-- predates the ten-colour palette the constraint is replaced here, so this file
+-- lands on the current state whether it is run fresh or over an existing schema.
+alter table public.tags
+  drop constraint if exists tags_color_check;
+
+alter table public.tags
+  add constraint tags_color_check
+  check (
+    color in ('slate', 'red', 'orange', 'amber', 'green',
+              'teal', 'blue', 'indigo', 'violet', 'pink')
+  );
 
 -- `pinned` floats a note to the top of its collection, above the normal
 -- `created_at desc` order — the ordering itself lives in the query, not here.

@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 
 import { CollectionPicker } from "@/components/notes/collection-picker";
 import { DeleteNote } from "@/components/notes/delete-note";
@@ -7,6 +7,7 @@ import { NoteEditor } from "@/components/notes/note-editor";
 import { NoteImages } from "@/components/notes/note-images";
 import { NoteSkeleton } from "@/components/notes/note-skeleton";
 import { TagEditor } from "@/components/notes/tag-editor";
+import { AFTER_SIGN_IN_PATH } from "@/lib/auth-redirect";
 import { getCollections, getNote, getNoteImages } from "@/lib/db";
 import { requireUser } from "@/lib/db/auth";
 
@@ -36,9 +37,21 @@ async function NoteDetail({ params }: NotePageProps) {
     getNoteImages(id),
   ]);
 
-  // A missing note and a note owned by someone else are indistinguishable
-  // through RLS, and both should read as "not found".
-  if (!note) notFound();
+  /**
+   * Back to the workspace rather than `notFound()`.
+   *
+   * Deleting a note revalidates `/notes` as a layout, which re-renders whatever
+   * route the user is on — including this one, for the note that was just deleted.
+   * That payload arrives before any client-side navigation can, so `notFound()` put
+   * a 404 on screen for a delete that had in fact succeeded. Redirecting makes the
+   * outcome deterministic instead of a race, and it covers every caller: the card in
+   * the sidebar, the button on this page, and a stale bookmark alike.
+   *
+   * Nothing leaks by redirecting. A missing note and someone else's note are
+   * indistinguishable through RLS, so both land here, and `/notes` says nothing about
+   * whether the id ever existed.
+   */
+  if (!note) redirect(AFTER_SIGN_IN_PATH);
 
   return (
     <article className="flex max-w-2xl flex-col gap-8">

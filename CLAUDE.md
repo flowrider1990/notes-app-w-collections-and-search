@@ -167,6 +167,19 @@ Storage bucket, `note-images`.
 - **Tag names are case-folded.** One tag per name per user regardless of case, enforced both by
   `addTagToNote` and by a unique index on `(user_id, lower(name))`. Otherwise "work" and "Work"
   become two pills that look identical, draw the same colour, and filter to disjoint sets of notes.
+  `createTag` and `updateTag` both write into that same index, so creating or renaming onto a name
+  that already exists in any casing raises `23505` and is reported as a duplicate — it is never a
+  silent merge. Recasing a tag's own name is fine, because the only conflicting row is itself.
+  `deleteTag` is a real delete of the tag row: `note_tags.tag_id` cascades, so the links go and every
+  note keeps its text. Removing a tag *from a note* is a different thing — `removeTagFromNote` drops
+  the join row only and the tag stays in the workspace for reuse.
+- **The tag palette is ten fixed colours**, listed in `TAG_COLORS` in `lib/tag-colors.ts` and enforced
+  by `tags_color_check`. The two lists are not linked by anything but this note: offering a colour the
+  constraint does not know fails at runtime as `23514`, which a user only sees as "Could not update
+  the tag", so the helpers validate against `TAG_COLORS` before writing. A tag created from a note
+  takes a colour hashed from its name; the sidebar's tag manager then lets the user pick any of the
+  ten. Class names are spelled out per colour rather than interpolated, because Tailwind only compiles
+  literals it can find in the source — and `lib/` is in the content globs for exactly that reason.
 - Primary keys are `uuid` defaulting to `gen_random_uuid()`. Timestamps are `timestamptz`.
 - `notes.updated_at` is maintained by a database trigger, not by application code. The trigger fires
   on every `UPDATE`, so flipping `pinned` or `archived` bumps it too — do not read it as "last
@@ -187,7 +200,10 @@ Storage bucket, `note-images`.
   Deleting a note reads the paths, deletes the row, then removes the files: Postgres cascades the
   rows but knows nothing about Storage, and there is no transaction across both. Files-first would
   risk destroying them and then failing to delete the note — irreversible loss — so the order is
-  chosen to make the worst case orphaned objects instead.
+  chosen to make the worst case orphaned objects instead. `deleteArchivedNotes` keeps that order for
+  the whole archive at once: collect the ids, read their paths, one `delete ... in (ids)`, then one
+  `remove`. It returns the deleted count rather than reading a row back — it targets a set, not one
+  row by id, so the rule below does not apply and an empty archive is not a failure.
 - **Shared collections are the one sanctioned RLS bypass.** `collections.share_token` plus the
   `security definer` function `public.shared_collection(token uuid)`, granted to `anon`, is how a
   share link is read without a session. This does *not* contradict rule 5: no secret or service-role

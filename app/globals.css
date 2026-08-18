@@ -107,3 +107,56 @@
     @apply bg-ring/20;
   }
 }
+
+@layer components {
+  /*
+   * The small icon buttons that sit on a hoverable row — pin, archive, rename,
+   * share. They stay quiet until the row is hovered, so a list of notes reads as
+   * text rather than as a panel of controls.
+   *
+   * "Until hovered" is only meaningful on a device that can hover. A touch screen
+   * has no hover state at all, so the previous `opacity-0 group-hover:opacity-100`
+   * left these permanently invisible on a phone and there was no way to archive a
+   * note. The hiding is therefore scoped to fine-pointer devices, and touch gets
+   * the controls at full opacity all the time.
+   *
+   * Written here rather than as Tailwind variants because the visible rules must
+   * beat the hidden one no matter what order Tailwind emits them in: the two
+   * selectors below carry more specificity than the bare class, so the outcome
+   * does not depend on the stylesheet's sort order.
+   *
+   * `h-8 w-8` is 32px — the icon inside is 14px, which on its own gave a 22px
+   * target, under the 24px minimum for a pointer and far under it for a thumb.
+   */
+  /* Add `row-control-always` when the control itself is the only marker of a
+   * state — a pinned note, a shared collection. Hiding it would hide the state. */
+  /*
+   * `icon-button` is the plain form: a 32px target that is always visible, for
+   * controls the user came to use — the rename form's confirm and cancel, the tag
+   * manager's rows. `row-control` adds the fading behaviour above it.
+   */
+  .icon-button,
+  .row-control {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md
+      disabled:opacity-50;
+  }
+
+  .icon-button {
+    @apply transition-colors hover:bg-accent;
+  }
+
+  .row-control {
+    @apply transition-opacity hover:bg-background;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .row-control:not(.row-control-always) {
+      opacity: 0;
+    }
+
+    .group:hover .row-control,
+    .row-control:focus-visible {
+      opacity: 1;
+    }
+  }
+}

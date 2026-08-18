@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
@@ -63,5 +64,7 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  // Imported rather than `require`d: this file is TypeScript and an ESM module, and
+  // `require()` is a lint error under next/typescript.
+  plugins: [tailwindcssAnimate],
 } satisfies Config;

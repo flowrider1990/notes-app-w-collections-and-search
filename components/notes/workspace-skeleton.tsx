@@ -4,10 +4,10 @@ import { SectionLabel } from "@/components/ui/section-label";
 /**
  * Stands in for `WorkspaceSidebar` while the workspace loads.
  *
- * Mirrors that component's real order and sizes — search box, tag row, the two
- * create buttons, then collection groups holding note cards — because the whole
- * point is that nothing moves when the data lands. If the sidebar's layout
- * changes, this has to change with it or the swap will visibly jump.
+ * Mirrors that component's real order and sizes — search box, tag row, then the
+ * Collections section with its create button and groups — because the whole point
+ * is that nothing moves when the data lands. If the sidebar's layout changes,
+ * this has to change with it or the swap will visibly jump.
  *
  * The headings are real text rather than blocks: they are already known, so
  * greying them out would be pretending to load something that is not loading.
@@ -30,15 +30,13 @@ export function WorkspaceSkeleton() {
         </div>
       </div>
 
-      {/* New note / New collection */}
+      {/* Collections: the label, the New collection button, then two groups — the
+          second holding cards like the expanded "Uncollected" group the real
+          sidebar opens by default. New note is not here: it lives in the sidebar
+          header, which renders immediately and never waits on this. */}
       <div className="flex flex-col gap-2">
+        <SectionLabel>Collections</SectionLabel>
         <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
-
-      {/* Two collection groups, the second holding cards like the expanded
-          "Uncollected" group the real sidebar opens by default. */}
-      <div className="flex flex-col gap-2">
         <CollectionGroupSkeleton />
         <CollectionGroupSkeleton cards={2} />
       </div>

@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Search } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 
 import { recordSearchAction, searchNotesAction } from "@/app/notes/actions";
+import { ClearArchive } from "@/components/notes/clear-archive";
 import { CollectionGroup } from "@/components/notes/collection-group";
 import { NewCollection } from "@/components/notes/new-collection";
-import { NewNote } from "@/components/notes/new-note";
 import { SearchHistory } from "@/components/notes/search-history";
+import { TagManager } from "@/components/notes/tag-manager";
 import { TagPill } from "@/components/notes/tag-pill";
 import { Input } from "@/components/ui/input";
 import { SectionLabel } from "@/components/ui/section-label";
@@ -43,6 +44,8 @@ export function WorkspaceSidebar({
 }: WorkspaceSidebarProps) {
   const [query, setQuery] = useState("");
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  /** Whether the Tags section is showing filter pills or the rename/delete rows. */
+  const [managingTags, setManagingTags] = useState(false);
   /** Server search results. `null` means no active search — render everything. */
   const [results, setResults] = useState<Note[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -170,6 +173,32 @@ export function WorkspaceSidebar({
     };
   }, [results, notes, selectedTagIds]);
 
+  /**
+   * How many notes carry each tag. Counted across the whole workspace, archived
+   * notes included: the delete confirmation is about what the tag is attached to,
+   * not about what the current view happens to show.
+   */
+  const tagUsage = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const note of notes) {
+      for (const tag of note.tags) {
+        counts.set(tag.id, (counts.get(tag.id) ?? 0) + 1);
+      }
+    }
+
+    return counts;
+  }, [notes]);
+
+  /**
+   * A deleted tag has to leave the filter too. Left in place it would keep
+   * narrowing the list — AND semantics, so to nothing at all — with no pill on
+   * screen to explain it or to switch off.
+   */
+  function forgetTag(tagId: string) {
+    setSelectedTagIds((current) => current.filter((id) => id !== tagId));
+  }
+
   function toggleTag(tagId: string) {
     setSelectedTagIds((current) =>
       current.includes(tagId)
@@ -211,15 +240,26 @@ export function WorkspaceSidebar({
             }}
             placeholder="Search notes"
             aria-label="Search notes"
-            className="pl-9"
+            className="pl-9 pr-9"
           />
+
+          {/* Inside the field rather than on a line of its own. As a block below
+              the input it entered and left the flow on every debounce tick, so
+              the entire list below it jumped by the height of one line each time
+              the user paused typing. */}
+          {searching ? (
+            <Loader2
+              size={15}
+              aria-hidden
+              className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-muted-foreground"
+            />
+          ) : null}
         </div>
 
-        {searching ? (
-          <p className="px-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-            Searching…
-          </p>
-        ) : null}
+        {/* The spinner is decoration; this is what a screen reader hears. */}
+        <span role="status" className="sr-only">
+          {searching ? "Searching…" : ""}
+        </span>
 
         {searchError ? (
           <p role="alert" className="px-1 text-xs text-destructive">
@@ -231,10 +271,32 @@ export function WorkspaceSidebar({
       </div>
 
       <div className="flex flex-col gap-2">
-        <SectionLabel>Tags</SectionLabel>
-        {tags.length === 0 ? (
+        <div className="flex items-center justify-between gap-2">
+          <SectionLabel>Tags</SectionLabel>
+
+          {/* Offered even with no tags, because creating the first one happens in
+              there. Set in the same mono as the label beside it: this is the app
+              talking about the section, not content. */}
+          <button
+            type="button"
+            onClick={() => setManagingTags((current) => !current)}
+            aria-expanded={managingTags}
+            className="-mr-1 inline-flex h-8 items-center rounded-md px-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {managingTags ? "Done" : "Manage"}
+          </button>
+        </div>
+
+        {managingTags ? (
+          <TagManager
+            tags={tags}
+            usage={tagUsage}
+            selectedTagIds={selectedTagIds}
+            onDeleted={forgetTag}
+          />
+        ) : tags.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No tags yet. Open a note to add one.
+            No tags yet. Add one to a note, or create one under Manage.
           </p>
         ) : (
           <div className="flex flex-wrap gap-1">
@@ -256,101 +318,109 @@ export function WorkspaceSidebar({
         )}
       </div>
 
+      {/* Label, create control and the list itself are one section: the gap-7
+          rhythm between sections would otherwise strand the label from the groups
+          it names. */}
       <div className="flex flex-col gap-2">
-        <NewNote />
+        <SectionLabel>Collections</SectionLabel>
         <NewCollection />
+
+        {activeNotes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {archivedNotes.length > 0
+              ? "Every note is archived. Restore one from the Archive below."
+              : "No notes yet. Nothing to show here."}
+          </p>
+        ) : filterActive && filteredActive.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{noResultsMessage()}</p>
+        ) : (
+          /* Faded while a search is in flight. The previous results stay mounted on
+             purpose — swapping them for a skeleton on every keystroke would be far
+             worse than showing them slightly stale — but at full opacity they look
+             like an answer to the query being typed, which they are not. */
+          <div
+            aria-busy={searching}
+            className={cn(
+              "flex flex-col gap-2 transition-opacity",
+              searching && "opacity-50",
+            )}
+          >
+            {collections.map((collection) => {
+              const inCollection = filteredActive.filter(
+                (note) => note.collection_id === collection.id,
+              );
+              // Counted from the whole workspace, minus archived notes: the badge
+              // reports what the collection holds in the main view, not what
+              // survived the current search or filter.
+              const totalInCollection = activeNotes.filter(
+                (note) => note.collection_id === collection.id,
+              ).length;
+
+              return (
+                <CollectionGroup
+                  key={collection.id}
+                  collectionId={collection.id}
+                  shareToken={collection.share_token}
+                  name={collection.name}
+                  notes={inCollection}
+                  totalCount={totalInCollection}
+                  emptyMessage={
+                    filterActive
+                      ? "No notes here match the current filter."
+                      : "This collection is empty."
+                  }
+                  // While filtering, open only the groups that actually have
+                  // matches — otherwise hits stay hidden behind a chevron.
+                  forceExpanded={filterActive && inCollection.length > 0}
+                />
+              );
+            })}
+
+            {/* No collectionId: "Uncollected" is the collection_id-is-null bucket
+                rather than a row, so it offers no rename or share control. */}
+            <CollectionGroup
+              name="Uncollected"
+              notes={uncollected}
+              totalCount={
+                activeNotes.filter((note) => note.collection_id === null).length
+              }
+              defaultExpanded
+              emptyMessage={
+                filterActive
+                  ? "No uncollected notes match the current filter."
+                  : "Every note belongs to a collection."
+              }
+              forceExpanded={filterActive && uncollected.length > 0}
+            />
+          </div>
+        )}
       </div>
 
-      {activeNotes.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {archivedNotes.length > 0
-            ? "Every note is archived. Restore one from the Archive below."
-            : "No notes yet. Nothing to show here."}
-        </p>
-      ) : filterActive && filteredActive.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{noResultsMessage()}</p>
-      ) : (
-        /* Faded while a search is in flight. The previous results stay mounted on
-           purpose — swapping them for a skeleton on every keystroke would be far
-           worse than showing them slightly stale — but at full opacity they look
-           like an answer to the query being typed, which they are not. */
-        <div
-          aria-busy={searching}
-          className={cn(
-            "flex flex-col gap-2 transition-opacity",
-            searching && "opacity-50",
-          )}
-        >
-          {collections.map((collection) => {
-            const inCollection = filteredActive.filter(
-              (note) => note.collection_id === collection.id,
-            );
-            // Counted from the whole workspace, minus archived notes: the badge
-            // reports what the collection holds in the main view, not what
-            // survived the current search or filter.
-            const totalInCollection = activeNotes.filter(
-              (note) => note.collection_id === collection.id,
-            ).length;
+      {/* Only once something is actually archived. A permanent section reading
+          "Nothing archived." is a row of furniture describing an absence, and it
+          is the last thing in a column the user scrolls to reach.
 
-            return (
-              <CollectionGroup
-                key={collection.id}
-                collectionId={collection.id}
-                shareToken={collection.share_token}
-                name={collection.name}
-                notes={inCollection}
-                totalCount={totalInCollection}
-                emptyMessage={
-                  filterActive
-                    ? "No notes here match the current filter."
-                    : "This collection is empty."
-                }
-                // While filtering, open only the groups that actually have
-                // matches — otherwise hits stay hidden behind a chevron.
-                forceExpanded={filterActive && inCollection.length > 0}
-              />
-            );
-          })}
-
-          {/* No collectionId: "Uncollected" is the collection_id-is-null bucket
-              rather than a row, so it offers no rename or share control. */}
-          <CollectionGroup
-            name="Uncollected"
-            notes={uncollected}
-            totalCount={
-              activeNotes.filter((note) => note.collection_id === null).length
-            }
-            defaultExpanded
-            emptyMessage={
-              filterActive
-                ? "No uncollected notes match the current filter."
-                : "Every note belongs to a collection."
-            }
-            forceExpanded={filterActive && uncollected.length > 0}
-          />
-        </div>
-      )}
-
-      {/* Outside the branches above on purpose. Both of them test the *active*
-          set, so archiving every note would otherwise leave the sidebar saying
-          there is nothing to show and render no Archive — stranding the notes
-          with no way to restore them.
+          Keyed off the unfiltered `archivedNotes`, and outside the branches above
+          on purpose: those test the *active* set, so archiving every note would
+          otherwise leave the sidebar saying there is nothing to show and render no
+          Archive — stranding the notes with no way to restore them.
 
           `droppable={false}` because Archive has no collectionId, which is how
           "Uncollected" is expressed: a drop here would resolve to null and move
           the note out of its collection rather than archiving it. */}
-      <CollectionGroup
-        name="Archive"
-        notes={filteredArchived}
-        totalCount={archivedNotes.length}
-        droppable={false}
-        emptyMessage={
-          filterActive
-            ? "No archived notes match the current filter."
-            : "Nothing archived."
-        }
-        forceExpanded={filterActive && filteredArchived.length > 0}
-      />
+      {archivedNotes.length > 0 ? (
+        <CollectionGroup
+          name="Archive"
+          notes={filteredArchived}
+          totalCount={archivedNotes.length}
+          droppable={false}
+          emptyMessage="No archived notes match the current filter."
+          forceExpanded={filterActive && filteredArchived.length > 0}
+          // The unfiltered count: clearing the archive deletes everything in it, not
+          // just the cards a search left visible.
+          action={<ClearArchive count={archivedNotes.length} />}
+        />
+      ) : null}
     </div>
   );
 }
