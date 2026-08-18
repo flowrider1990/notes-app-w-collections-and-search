@@ -124,15 +124,15 @@ Nine, each on its own feature branch and merged through a pull request.
 
 | Task | Tier | PR |
 | --- | --- | --- |
-| Collections and tag-based filtering | Medium | [#2](../../pull/2) |
-| Server-side search (Postgres full-text) | Medium | [#2](../../pull/2) |
-| Loading states — skeletons, never a blank flash | Easy | [#3](../../pull/3) |
-| Minimalist design pass | Easy | [#4](../../pull/4) |
-| Export a note to Markdown | Medium | [#5](../../pull/5) |
-| Image uploads to Supabase Storage | **Hard** | [#6](../../pull/6) |
-| Password-reset email flow | Medium | [#8](../../pull/8) |
-| Self-service sign-up with confirmation email | Medium | [#8](../../pull/8) |
-| GitHub social login | **Hard** | [#8](../../pull/8) |
+| Collections and tag-based filtering | Medium | [#2](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/2) |
+| Server-side search (Postgres full-text) | Medium | [#2](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/2) |
+| Loading states — skeletons, never a blank flash | Easy | [#3](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/3) |
+| Minimalist design pass | Easy | [#4](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/4) |
+| Export a note to Markdown | Medium | [#5](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/5) |
+| Image uploads to Supabase Storage | **Hard** | [#6](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/6) |
+| Password-reset email flow | Medium | [#8](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/8) |
+| Self-service sign-up with confirmation email | Medium | [#8](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/8) |
+| GitHub social login | **Hard** | [#8](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/8) |
 
 ## Fresh-session diff review
 
@@ -149,7 +149,7 @@ label rather than for anything it might find, and the honest record seemed worth
 What the reviews *did* produce is below, and it is the substantive part either way.
 
 **Finding.** The review of PR #2 produced five findings serious enough to hold up further work, and
-they were fixed as their own PR rather than folded into the next feature — [#7](../../pull/7),
+they were fixed as their own PR rather than folded into the next feature — [#7](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/7),
 "close the five outstanding findings from the PR #2 review". The most useful of them was structural
 rather than cosmetic: writes that targeted a single row by id did not read that row back, so a write
 to a row RLS hid from the caller returned zero rows with `error: null` and reported success while

@@ -105,12 +105,12 @@ Each was built on its own feature branch and merged through a pull request:
 
 | Task | Difficulty | PR |
 | --- | --- | --- |
-| Server-side search, and tags with a tag filter | Medium | [#2](../../pull/2) |
-| Loading states — skeletons instead of blank flashes | Easy | [#3](../../pull/3) |
-| Minimalist design pass | Easy | [#4](../../pull/4) |
-| Export a note to Markdown | Medium | [#5](../../pull/5) |
-| Image uploads to Supabase Storage | **Hard** | [#6](../../pull/6) |
-| Password-reset email flow, self-service sign-up, and GitHub social login | Medium / **Hard** | [#8](../../pull/8) |
+| Server-side search, and tags with a tag filter | Medium | [#2](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/2) |
+| Loading states — skeletons instead of blank flashes | Easy | [#3](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/3) |
+| Minimalist design pass | Easy | [#4](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/4) |
+| Export a note to Markdown | Medium | [#5](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/5) |
+| Image uploads to Supabase Storage | **Hard** | [#6](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/6) |
+| Password-reset email flow, self-service sign-up, and GitHub social login | Medium / **Hard** | [#8](https://github.com/flowrider1990/notes-app-w-collections-and-search/pull/8) |
 
 Design notes, trade-offs and the reasoning behind the persistence choice are in
 [`REFLECTION.md`](REFLECTION.md) and [`docs/decisions.md`](docs/decisions.md).
