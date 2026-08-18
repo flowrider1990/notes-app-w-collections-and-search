@@ -10,6 +10,15 @@ const compat = new FlatCompat({
 });
 
 const eslintConfig = [
+  {
+    /**
+     * Generated and vendored trees. Without this `npm run lint` walks into the build
+     * output and reports tens of thousands of errors in code nobody wrote — which
+     * hides the handful that are real. `.next` is Next's output, and `.claude/skills`
+     * is installed by `npx skills add`, so neither is ours to fix.
+     */
+    ignores: [".next/**", "out/**", "build/**", ".claude/skills/**"],
+  },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
 ];
 

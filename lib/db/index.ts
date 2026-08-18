@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { toTsQuery } from "@/lib/search-query";
-import { pickTagColor } from "@/lib/tag-colors";
+import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
 
 /**
  * The single centralised data-access module: every Supabase query for notes,
@@ -423,6 +423,77 @@ export async function deleteNote(id: string): Promise<void> {
   }
 }
 
+/**
+ * Deletes every archived note, and returns how many went.
+ *
+ * Same ordering as `deleteNote`, for the same reason: read the image paths, delete
+ * the rows, then remove the files. Postgres cascades `note_images`, Storage knows
+ * nothing about it, and there is no transaction spanning both — so the order is
+ * chosen to make the worst case orphaned objects rather than files destroyed for a
+ * note that then failed to delete.
+ *
+ * One statement for the rows rather than a loop over `deleteNote`. A loop would be N
+ * round trips and, worse, could fail half way and leave the user staring at a
+ * partly-cleared archive with an error that does not say how far it got. The count
+ * comes back from the delete itself, so the number reported is the number deleted.
+ *
+ * No `assertWriteHit`: this targets a set, not one row by id, and an empty archive is
+ * not a failure. Zero is a truthful answer that the caller reports as "nothing to
+ * clear".
+ *
+ * RLS scopes both statements to the signed-in user, so `archived = true` can never
+ * reach someone else's notes.
+ */
+export async function deleteArchivedNotes(): Promise<number> {
+  const supabase = await createClient();
+
+  const { data: archived, error: listError } = await supabase
+    .from("notes")
+    .select("id")
+    .eq("archived", true);
+
+  if (listError) {
+    throw new Error(`Could not list archived notes: ${listError.message}`);
+  }
+
+  const ids = (archived ?? []).map((row) => (row as { id: string }).id);
+  if (ids.length === 0) return 0;
+
+  // Read before the delete: the cascade takes these rows with it, and after that
+  // nothing knows which files belonged to which note.
+  const { data: images, error: imageError } = await supabase
+    .from("note_images")
+    .select("storage_path")
+    .in("note_id", ids);
+
+  if (imageError) {
+    throw new Error(`Could not list the notes' images: ${imageError.message}`);
+  }
+
+  const paths = (images ?? []).map(
+    (row) => (row as { storage_path: string }).storage_path,
+  );
+
+  const { data: deleted, error: deleteError } = await supabase
+    .from("notes")
+    .delete()
+    .in("id", ids)
+    .select("id");
+
+  if (deleteError) {
+    throw new Error(`Could not clear the archive: ${deleteError.message}`);
+  }
+
+  if (paths.length > 0) {
+    // Not fatal, exactly as in `deleteNote`: the notes are gone, which is what was
+    // asked. Reporting a Storage failure as "could not clear the archive" would
+    // describe the wrong outcome to someone whose notes have in fact been deleted.
+    await supabase.storage.from(IMAGE_BUCKET).remove(paths);
+  }
+
+  return (deleted ?? []).length;
+}
+
 /** Moves a note into a collection, or out of every collection when null. */
 export async function setNoteCollection(
   noteId: string,
@@ -589,6 +660,136 @@ export async function removeTagFromNote(
   if (error) {
     throw new Error(`Could not remove tag: ${error.message}`);
   }
+}
+
+/**
+ * Creates a tag on its own, attached to no note.
+ *
+ * Until the tag manager existed a tag could only be born from `addTagToNote`, which
+ * meant naming your categories required a note to hang them on. This is the same
+ * insert without that detour.
+ *
+ * The duplicate check is left to the database rather than done with a lookup first,
+ * unlike `addTagToNote`. That function *wants* an existing tag and reuses it, so it
+ * has to look; here a name already in use is a mistake to report, and the unique
+ * indexes on `(user_id, name)` and `(user_id, lower(name))` answer it without a race
+ * between the check and the insert.
+ *
+ * No colour means the name picks one, which keeps a tag created here consistent with
+ * one created from a note.
+ */
+export async function createTag(name: string, color?: string): Promise<void> {
+  const supabase = await createClient();
+  const trimmed = name.trim();
+
+  if (!trimmed) {
+    throw new Error("A tag needs a name.");
+  }
+
+  if (color !== undefined && !(TAG_COLORS as readonly string[]).includes(color)) {
+    throw new Error(`"${color}" is not one of the tag colours.`);
+  }
+
+  const { error } = await supabase
+    .from("tags")
+    .insert({ name: trimmed, color: color ?? pickTagColor(trimmed) })
+    .select("id")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      throw new Error(`You already have a tag called "${trimmed}".`);
+    }
+    throw new Error(`Could not create tag "${trimmed}": ${error.message}`);
+  }
+}
+
+/**
+ * Renames a tag and/or changes its colour. Both fields are optional, so the caller
+ * can send only what the user actually altered.
+ *
+ * One update rather than a helper per field: the sidebar's tag editor commits a name
+ * and a colour together, and splitting it would mean two round trips that can half
+ * succeed.
+ *
+ * The colour is checked against `TAG_COLORS` here because the column carries a
+ * `check` constraint listing the same six names. Letting a bad value through would
+ * surface as Postgres error 23514 — accurate, but not something to show a user.
+ *
+ * A rename can collide: `tags` is unique on `(user_id, name)` and, since case
+ * folding landed, also on `(user_id, lower(name))`. Renaming "work" to "Personal"
+ * while "personal" exists is therefore a 23505 rather than a silent merge. Changing
+ * only the casing of the tag's own name is fine — the conflicting row is itself.
+ */
+export async function updateTag(
+  id: string,
+  changes: { name?: string; color?: string },
+): Promise<void> {
+  const supabase = await createClient();
+
+  const patch: { name?: string; color?: TagColor } = {};
+
+  if (changes.name !== undefined) {
+    const trimmed = changes.name.trim();
+    if (!trimmed) {
+      throw new Error("A tag needs a name.");
+    }
+    patch.name = trimmed;
+  }
+
+  if (changes.color !== undefined) {
+    if (!(TAG_COLORS as readonly string[]).includes(changes.color)) {
+      throw new Error(`"${changes.color}" is not one of the tag colours.`);
+    }
+    patch.color = changes.color as TagColor;
+  }
+
+  // Nothing to write. Sending an empty patch would update zero columns and then
+  // trip the read-back guard, reporting a missing tag for a no-op.
+  if (Object.keys(patch).length === 0) return;
+
+  const { data, error } = await supabase
+    .from("tags")
+    .update(patch)
+    .eq("id", id)
+    .select("id");
+
+  if (error) {
+    if (error.code === "23505") {
+      throw new Error(`You already have a tag called "${patch.name}".`);
+    }
+    throw new Error(`Could not update tag: ${error.message}`);
+  }
+
+  assertWriteHit(data, "update that tag");
+}
+
+/**
+ * Deletes a tag outright, removing it from every note that carries it.
+ *
+ * `note_tags.tag_id` is `on delete cascade`, so the join rows go with it and the
+ * notes themselves are untouched — this unfiles them, it does not delete anything
+ * the user wrote.
+ *
+ * Guarded with `assertWriteHit`, unlike `removeTagFromNote`. That one tolerates a
+ * missing row because unlinking something already unlinked is the state the caller
+ * wanted; this is a deliberate, confirmed, irreversible action, so a stale id is
+ * worth reporting rather than silently calling done.
+ */
+export async function deleteTag(id: string): Promise<void> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("tags")
+    .delete()
+    .eq("id", id)
+    .select("id");
+
+  if (error) {
+    throw new Error(`Could not delete tag: ${error.message}`);
+  }
+
+  assertWriteHit(data, "delete that tag");
 }
 
 /**

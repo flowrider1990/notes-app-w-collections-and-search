@@ -91,12 +91,10 @@ export function ShareCollection({
           disabled={pending}
           aria-label={`Share collection ${name}`}
           className={cn(
-            "rounded p-1 transition-opacity hover:bg-background disabled:opacity-50",
+            "row-control",
             // A shared collection keeps its control visible: it is the only marker
             // that the collection is readable by anyone with the link.
-            shareToken
-              ? "text-primary opacity-100"
-              : "opacity-0 focus:opacity-100 group-hover:opacity-100",
+            shareToken && "row-control-always text-primary",
           )}
         >
           <Share2 size={14} aria-hidden />

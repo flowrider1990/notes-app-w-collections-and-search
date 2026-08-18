@@ -2,10 +2,15 @@
 
 import { useState, useTransition, type DragEvent } from "react";
 import Link from "next/link";
-import { Archive, ArchiveRestore, Pin } from "lucide-react";
+import { Archive, ArchiveRestore, Pin, Trash2 } from "lucide-react";
 
-import { setNoteArchivedAction, setNotePinnedAction } from "@/app/notes/actions";
+import {
+  deleteNoteAction,
+  setNoteArchivedAction,
+  setNotePinnedAction,
+} from "@/app/notes/actions";
 import { TagPill } from "@/components/notes/tag-pill";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Note } from "@/lib/db";
 import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
@@ -26,6 +31,7 @@ import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
  */
 export function NoteCard({ note }: { note: Note }) {
   const [error, setError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDragStart(event: DragEvent<HTMLDivElement>) {
@@ -49,6 +55,25 @@ export function NoteCard({ note }: { note: Note }) {
     startTransition(async () => {
       const result = await setNoteArchivedAction(note.id, !note.archived);
       if (result.error) setError(result.error);
+    });
+  }
+
+  function remove() {
+    setError(null);
+
+    startTransition(async () => {
+      const result = await deleteNoteAction(note.id);
+
+      if (result.error) {
+        setError(result.error);
+        setConfirmingDelete(false);
+        return;
+      }
+
+      // No navigation here. If the editor happens to be showing this note, the
+      // revalidation re-renders that route and the page redirects to /notes itself —
+      // which beats racing it from the client. Deleting any other note leaves the
+      // editor where it is, which is what someone mid-edit wants.
     });
   }
 
@@ -93,13 +118,11 @@ export function NoteCard({ note }: { note: Note }) {
             aria-pressed={note.pinned}
             aria-label={`${note.pinned ? "Unpin" : "Pin"} ${note.title || "untitled note"}`}
             className={cn(
-              "rounded p-1 transition-opacity hover:bg-background disabled:opacity-50",
+              "row-control",
               // A pinned note keeps its control visible: it is the only thing
               // marking the note as pinned, so hiding it until hover would hide
               // the state as well.
-              note.pinned
-                ? "opacity-100"
-                : "opacity-0 focus:opacity-100 group-hover:opacity-100",
+              note.pinned && "row-control-always",
             )}
           >
             {/* A filled pin for pinned, an outline for not — the icon carries the
@@ -112,7 +135,7 @@ export function NoteCard({ note }: { note: Note }) {
             onClick={toggleArchived}
             disabled={pending}
             aria-label={`${note.archived ? "Restore" : "Archive"} ${note.title || "untitled note"}`}
-            className="rounded p-1 opacity-0 transition-opacity hover:bg-background focus:opacity-100 disabled:opacity-50 group-hover:opacity-100"
+            className="row-control"
           >
             {note.archived ? (
               <ArchiveRestore size={14} aria-hidden />
@@ -120,8 +143,55 @@ export function NoteCard({ note }: { note: Note }) {
               <Archive size={14} aria-hidden />
             )}
           </button>
+
+          {/* Archived notes only. Everywhere else the reversible action is the one
+              on offer here, and deleting outright belongs on the note's own page
+              behind its fuller warning. In the Archive the decision has already
+              been made once, so a second route to it is a convenience rather than a
+              trap — still behind the confirm below. */}
+          {note.archived ? (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={pending}
+              aria-label={`Delete ${note.title || "untitled note"}`}
+              className="row-control text-destructive hover:bg-destructive/10"
+            >
+              <Trash2 size={14} aria-hidden />
+            </button>
+          ) : null}
         </div>
       </div>
+
+      {confirmingDelete ? (
+        <div className="mt-2 flex flex-col gap-2 rounded-md border border-destructive/40 p-2">
+          <p className="text-xs">
+            Delete <strong>{note.title || "this untitled note"}</strong> for good?
+            This cannot be undone.
+          </p>
+
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={remove}
+              disabled={pending}
+            >
+              {pending ? "Deleting…" : "Delete"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmingDelete(false)}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {error ? (
         <p role="alert" className="mt-1 text-xs text-destructive">

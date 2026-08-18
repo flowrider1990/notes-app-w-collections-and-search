@@ -9,8 +9,11 @@ import {
   clearSearchHistory,
   createCollection,
   createNote,
+  createTag,
+  deleteArchivedNotes,
   deleteNote,
   deleteNoteImage,
+  deleteTag,
   recordSearch,
   removeSearchHistoryEntry,
   removeTagFromNote,
@@ -22,6 +25,7 @@ import {
   shareCollection,
   unshareCollection,
   updateNote,
+  updateTag,
   type Note,
 } from "@/lib/db";
 
@@ -127,6 +131,29 @@ export async function deleteNoteAction(id: string): Promise<ActionResult> {
 
   revalidateWorkspace();
   return { error: null };
+}
+
+/**
+ * Deletes every archived note in one go.
+ *
+ * Returns the count so the sidebar can say what happened — "Deleted 4 notes" is worth
+ * more than a list that silently got shorter, especially for an action with no undo.
+ */
+export async function clearArchiveAction(): Promise<
+  ActionResult & { deleted: number }
+> {
+  await requireUser();
+
+  let deleted = 0;
+
+  try {
+    deleted = await deleteArchivedNotes();
+  } catch (cause) {
+    return { ...failure(cause, "Could not clear the archive."), deleted: 0 };
+  }
+
+  revalidateWorkspace();
+  return { error: null, deleted };
 }
 
 export async function createCollectionAction(name: string): Promise<ActionResult> {
@@ -425,6 +452,75 @@ export async function removeTagFromNoteAction(
     await removeTagFromNote(noteId, tagId);
   } catch (cause) {
     return failure(cause, "Could not remove the tag.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Creates a tag with no note attached, from the sidebar's tag manager.
+ *
+ * Returns its failure like the other naming actions: a duplicate name is an ordinary
+ * outcome the form can show beside its input, and throwing would take the sidebar
+ * down with it.
+ */
+export async function createTagAction(
+  name: string,
+  color?: string,
+): Promise<ActionResult> {
+  await requireUser();
+
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "A tag needs a name." };
+
+  try {
+    await createTag(trimmed, color);
+  } catch (cause) {
+    return failure(cause, "Could not create the tag.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Renames a tag and/or recolours it, everywhere it appears.
+ *
+ * Returns its failure rather than throwing for the same reason the collection
+ * rename does: this runs from the sidebar, and a throw there would replace the whole
+ * workspace with an error boundary over a duplicate name the user can simply retype.
+ */
+export async function updateTagAction(
+  id: string,
+  changes: { name?: string; color?: string },
+): Promise<ActionResult> {
+  await requireUser();
+
+  if (changes.name !== undefined && !changes.name.trim()) {
+    return { error: "A tag needs a name." };
+  }
+
+  try {
+    await updateTag(id, changes);
+  } catch (cause) {
+    return failure(cause, "Could not update the tag.");
+  }
+
+  revalidateWorkspace();
+  return { error: null };
+}
+
+/**
+ * Deletes a tag and, by cascade, its links to every note. The notes are untouched.
+ */
+export async function deleteTagAction(id: string): Promise<ActionResult> {
+  await requireUser();
+
+  try {
+    await deleteTag(id);
+  } catch (cause) {
+    return failure(cause, "Could not delete the tag.");
   }
 
   revalidateWorkspace();

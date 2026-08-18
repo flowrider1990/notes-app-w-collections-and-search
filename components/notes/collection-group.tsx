@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type DragEvent } from "react";
+import { useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, Pencil, X } from "lucide-react";
 
 import {
@@ -45,6 +45,13 @@ type CollectionGroupProps = {
   droppable?: boolean;
   defaultExpanded?: boolean;
   /**
+   * Controls for the group as a whole, rendered above its notes while it is open.
+   * Only the Archive uses it, for "Clear archive" — a destructive action that has no
+   * business sitting in the header row beside a rename pencil, and that should not be
+   * reachable without opening the group and seeing what is in it.
+   */
+  action?: ReactNode;
+  /**
    * Forces the group open regardless of what the user last clicked. Set while a
    * search or tag filter is active, so matches are never hidden inside a
    * collapsed group.
@@ -72,6 +79,7 @@ export function CollectionGroup({
   droppable = true,
   defaultExpanded = false,
   forceExpanded = false,
+  action,
 }: CollectionGroupProps) {
   const [open, setOpen] = useState(defaultExpanded);
   const [editing, setEditing] = useState(false);
@@ -195,7 +203,7 @@ export function CollectionGroup({
             type="submit"
             disabled={pending}
             aria-label="Save collection name"
-            className="rounded p-1 hover:bg-accent disabled:opacity-50"
+            className="icon-button"
           >
             <Check size={16} aria-hidden />
           </button>
@@ -203,7 +211,7 @@ export function CollectionGroup({
             type="button"
             onClick={cancelEdit}
             aria-label="Cancel rename"
-            className="rounded p-1 hover:bg-accent"
+            className="icon-button"
           >
             <X size={16} aria-hidden />
           </button>
@@ -266,7 +274,7 @@ export function CollectionGroup({
               type="button"
               onClick={beginEdit}
               aria-label={`Rename collection ${name}`}
-              className="rounded p-1 opacity-0 transition-opacity hover:bg-background focus:opacity-100 group-hover:opacity-100"
+              className="row-control"
             >
               <Pencil size={14} aria-hidden />
             </button>
@@ -288,6 +296,8 @@ export function CollectionGroup({
 
       {expanded ? (
         <div className="mt-1 flex flex-col gap-2 pl-2">
+          {action}
+
           {notes.length === 0 ? (
             <p className="px-1 py-2 text-sm text-muted-foreground">
               {emptyMessage}

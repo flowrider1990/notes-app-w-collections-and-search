@@ -14,7 +14,10 @@ Built with Next.js (App Router), TypeScript, Tailwind CSS and Supabase.
 - **Write** — a title and a plain-text body, saved by an explicit Save button, with an **Export .md**
   button that downloads the note as a Markdown file.
 - **Organise** — notes belong to a collection (or none), carry any number of colour-coded tags, and
-  can be pinned to the top, archived out of the way, or dragged between collections.
+  can be pinned to the top, archived out of the way, or dragged between collections. Archived notes
+  can be deleted one at a time or all at once with **Clear archive**. The sidebar's
+  tag manager creates, renames, recolours (ten colours) and deletes tags; a rename carries everywhere
+  the tag appears, and a delete unfiles the tag without touching the notes.
 - **Find** — a search box that queries Postgres full-text search, so the database returns only
   matching rows. Recent searches are remembered.
 - **Attach** — images upload to a private Supabase Storage bucket and render on the note when it is
