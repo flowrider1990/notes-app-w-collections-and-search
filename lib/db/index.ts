@@ -141,6 +141,21 @@ function assertWriteHit(rows: unknown[] | null, subject: string): void {
 }
 
 /**
+ * Names the one refusal the two collection writes can now produce.
+ *
+ * A note may only reference a collection its own owner holds. The database is the
+ * authority on that — `notes_insert` / `notes_update` reject it as `42501`, and the
+ * composite key `notes_collection_owner_fkey` as `23503`, whichever is reached first
+ * (see `supabase/migrations/20260819133628_scope_note_collection_to_owner.sql`).
+ * Neither code carries a message a user could act on, so the two callers translate
+ * it. This adds no check of its own and no round trip: passing a foreign collection
+ * id still fails in Postgres, not here.
+ */
+function isForeignCollection(error: { code?: string }): boolean {
+  return error.code === "42501" || error.code === "23503";
+}
+
+/**
  * Flattens the nested `note_tags(tags(...))` shape into a plain tag array.
  * The join row's `tags` arrives as an object or a single-element array
  * depending on how the relationship is inferred, so both are handled.
@@ -342,6 +357,12 @@ export async function createNote(
     .single();
 
   if (error) {
+    if (isForeignCollection(error)) {
+      throw new Error(
+        "Could not create note: that collection does not exist, or belongs to another account.",
+      );
+    }
+
     throw new Error(`Could not create note: ${error.message}`);
   }
 
@@ -509,6 +530,12 @@ export async function setNoteCollection(
     .select("id");
 
   if (error) {
+    if (isForeignCollection(error)) {
+      throw new Error(
+        "Could not move note: that collection does not exist, or belongs to another account.",
+      );
+    }
+
     throw new Error(`Could not move note: ${error.message}`);
   }
 

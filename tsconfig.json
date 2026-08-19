@@ -7,6 +7,9 @@
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
+    // The test files import `./auth-redirect.ts` by its real filename, which is
+    // what Node's built-in runner needs to strip types without a resolver.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",

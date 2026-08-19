@@ -82,6 +82,48 @@ create table if not exists public.notes (
   updated_at     timestamptz not null default now()
 );
 
+-- A note may only reference a collection owned by the same user. The single-column
+-- key above cannot express that, and it would not help if it could: referential
+-- integrity checks run as the constraint owner and bypass RLS, so a reference to a
+-- collection the caller cannot see still validates. The composite key does express
+-- it, and holds for every role rather than only for `authenticated`.
+--
+-- `on delete set null (collection_id)` is the column-list form (Postgres 15+):
+-- deleting a collection clears the reference without touching `user_id`, which is
+-- `not null`. MATCH SIMPLE means a row with `collection_id is null` is exempt, so an
+-- uncategorised note stays legal.
+--
+-- Added by supabase/migrations/20260819133628_scope_note_collection_to_owner.sql.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.collections'::regclass
+      and conname = 'collections_id_user_id_key'
+  ) then
+    alter table public.collections
+      add constraint collections_id_user_id_key unique (id, user_id);
+  end if;
+end $$;
+
+alter table public.notes
+  drop constraint if exists notes_collection_id_fkey;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notes'::regclass
+      and conname = 'notes_collection_owner_fkey'
+  ) then
+    alter table public.notes
+      add constraint notes_collection_owner_fkey
+      foreign key (collection_id, user_id)
+      references public.collections (id, user_id)
+      on delete set null (collection_id);
+  end if;
+end $$;
+
 -- Join table. Composite primary key prevents duplicate tag assignments.
 -- Cascades on both sides so deleting a note or a tag never orphans a join row.
 create table if not exists public.note_tags (
@@ -234,15 +276,44 @@ drop policy if exists notes_select on public.notes;
 create policy notes_select on public.notes
   for select to authenticated using (user_id = (select auth.uid()));
 
+-- `collection_id` is checked as well as `user_id`: a note may only point at a
+-- collection its own owner holds. Without it a caller who learned another user's
+-- collection uuid could attach their note to it, and the note then rendered on that
+-- user's anonymous share page. `collection_id is null` is tested first so an
+-- uncategorised note never runs the subquery.
 drop policy if exists notes_insert on public.notes;
 create policy notes_insert on public.notes
-  for insert to authenticated with check (user_id = (select auth.uid()));
+  for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and (
+      collection_id is null
+      or exists (
+        select 1 from public.collections c
+        where c.id = notes.collection_id
+          and c.user_id = (select auth.uid())
+      )
+    )
+  );
 
+-- `using` is deliberately left owner-only. It decides which rows may be updated at
+-- all, and adding the collection test there would make a row that already holds a
+-- foreign collection_id impossible to edit — including impossible to repair.
 drop policy if exists notes_update on public.notes;
 create policy notes_update on public.notes
   for update to authenticated
   using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()));
+  with check (
+    user_id = (select auth.uid())
+    and (
+      collection_id is null
+      or exists (
+        select 1 from public.collections c
+        where c.id = notes.collection_id
+          and c.user_id = (select auth.uid())
+      )
+    )
+  );
 
 drop policy if exists notes_delete on public.notes;
 create policy notes_delete on public.notes
@@ -438,6 +509,10 @@ as $$
   from public.collections c
   left join public.notes n
     on n.collection_id = c.id
+   -- Same owner, or a note attached to this collection by someone else would render
+   -- on its share page. Belt to the composite foreign key's braces: this also covers
+   -- any row that predates that key.
+   and n.user_id = c.user_id
    and not n.archived
   where c.share_token = token
   order by n.pinned desc nulls last, n.created_at desc;

@@ -29,11 +29,11 @@ import { createClient } from "@/lib/supabase/server";
  * sees a signed-in user.
  */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
+  const { searchParams, origin } = new URL(request.url);
 
   // Where to go once the session exists. Only ever an in-app path — this value
   // arrives from an email, not from our own code.
-  const next = safeNextPath(searchParams.get("next"));
+  const next = safeNextPath(searchParams.get("next"), origin);
 
   // Supabase forwards its own refusals — an expired or already-used link — as
   // `error`, which arrives instead of a token rather than alongside one.
