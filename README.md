@@ -58,6 +58,11 @@ policy is wrong — fix the policy. `.env.local` is git-ignored and must stay th
    every table, index, policy, trigger and function, written to run top to bottom in the dashboard
    SQL editor. Incremental changes live in [`supabase/migrations/`](supabase/migrations) and go out
    with `npx supabase db push --linked`.
+
+   One migration sorts out of order: `20260814085000_add_rls_auto_enable.sql` is dated before
+   `20260814085033_harden_rls_policies.sql`, which references the function it creates. On a
+   project that already has the later migration but not this one, `db push` refuses; run
+   `npx supabase db push --linked --include-all` once, then the plain command from then on.
 2. **Redirect URLs.** Authentication → URL Configuration → add `http://localhost:3000/**`. Every
    OAuth return and emailed auth link comes back to this origin; without the entry they land on the
    Site URL instead and the flow dies quietly.

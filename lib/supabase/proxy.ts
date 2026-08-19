@@ -1,17 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { hasEnvVars } from "../utils";
+
+import { isSharePath } from "../share-path";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   });
-
-  // If the env vars are not set, skip proxy check. You can remove this
-  // once you setup the project.
-  if (!hasEnvVars) {
-    return supabaseResponse;
-  }
 
   // With Fluid compute, don't put this client in a global environment
   // variable. Always create a new one on each request.
@@ -87,7 +82,7 @@ export async function updateSession(request: NextRequest) {
     // is redirected to the login page and the whole feature is unreachable. The
     // route itself is still gated: it reads through the token-scoped
     // `shared_collection` function, so an unknown token renders a 404.
-    !request.nextUrl.pathname.startsWith("/share")
+    !isSharePath(request.nextUrl.pathname)
   ) {
     // no user, potentially respond by redirecting the user to the login page
     return redirectTo("/auth/login");

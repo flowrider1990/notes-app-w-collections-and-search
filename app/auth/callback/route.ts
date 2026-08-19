@@ -17,7 +17,7 @@ import { createClient } from "@/lib/supabase/server";
  * never a blank screen.
  */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
+  const { searchParams, origin } = new URL(request.url);
 
   // Google's own refusals (a cancelled consent screen, a misconfigured client)
   // arrive here as `error`, not as an exchange failure further down.
@@ -53,5 +53,5 @@ export async function GET(request: NextRequest) {
 
   // Shared with `/auth/confirm`, which takes a destination from an email for the
   // same reason and needs the same open-redirect guard.
-  redirect(safeNextPath(searchParams.get("next")));
+  redirect(safeNextPath(searchParams.get("next"), origin));
 }

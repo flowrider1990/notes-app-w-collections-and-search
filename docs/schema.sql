@@ -82,6 +82,48 @@ create table if not exists public.notes (
   updated_at     timestamptz not null default now()
 );
 
+-- A note may only reference a collection owned by the same user. The single-column
+-- key above cannot express that, and it would not help if it could: referential
+-- integrity checks run as the constraint owner and bypass RLS, so a reference to a
+-- collection the caller cannot see still validates. The composite key does express
+-- it, and holds for every role rather than only for `authenticated`.
+--
+-- `on delete set null (collection_id)` is the column-list form (Postgres 15+):
+-- deleting a collection clears the reference without touching `user_id`, which is
+-- `not null`. MATCH SIMPLE means a row with `collection_id is null` is exempt, so an
+-- uncategorised note stays legal.
+--
+-- Added by supabase/migrations/20260819133628_scope_note_collection_to_owner.sql.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.collections'::regclass
+      and conname = 'collections_id_user_id_key'
+  ) then
+    alter table public.collections
+      add constraint collections_id_user_id_key unique (id, user_id);
+  end if;
+end $$;
+
+alter table public.notes
+  drop constraint if exists notes_collection_id_fkey;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notes'::regclass
+      and conname = 'notes_collection_owner_fkey'
+  ) then
+    alter table public.notes
+      add constraint notes_collection_owner_fkey
+      foreign key (collection_id, user_id)
+      references public.collections (id, user_id)
+      on delete set null (collection_id);
+  end if;
+end $$;
+
 -- Join table. Composite primary key prevents duplicate tag assignments.
 -- Cascades on both sides so deleting a note or a tag never orphans a join row.
 create table if not exists public.note_tags (
@@ -234,15 +276,44 @@ drop policy if exists notes_select on public.notes;
 create policy notes_select on public.notes
   for select to authenticated using (user_id = (select auth.uid()));
 
+-- `collection_id` is checked as well as `user_id`: a note may only point at a
+-- collection its own owner holds. Without it a caller who learned another user's
+-- collection uuid could attach their note to it, and the note then rendered on that
+-- user's anonymous share page. `collection_id is null` is tested first so an
+-- uncategorised note never runs the subquery.
 drop policy if exists notes_insert on public.notes;
 create policy notes_insert on public.notes
-  for insert to authenticated with check (user_id = (select auth.uid()));
+  for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and (
+      collection_id is null
+      or exists (
+        select 1 from public.collections c
+        where c.id = notes.collection_id
+          and c.user_id = (select auth.uid())
+      )
+    )
+  );
 
+-- `using` is deliberately left owner-only. It decides which rows may be updated at
+-- all, and adding the collection test there would make a row that already holds a
+-- foreign collection_id impossible to edit — including impossible to repair.
 drop policy if exists notes_update on public.notes;
 create policy notes_update on public.notes
   for update to authenticated
   using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()));
+  with check (
+    user_id = (select auth.uid())
+    and (
+      collection_id is null
+      or exists (
+        select 1 from public.collections c
+        where c.id = notes.collection_id
+          and c.user_id = (select auth.uid())
+      )
+    )
+  );
 
 drop policy if exists notes_delete on public.notes;
 create policy notes_delete on public.notes
@@ -308,10 +379,16 @@ create policy search_history_delete on public.search_history
 -- public.rls_auto_enable() — the safety net under all of the above
 -- ------------------------------------------------------------
 -- An event trigger that enables RLS on every table created in `public`, so a table
--- added without a policy fails closed (no rows to anyone) instead of open. It
--- predates these migrations and lives only in the database; it is recorded here
--- because docs/schema.sql is the current-state reference, and because a reader who
--- finds RLS already enabled on a brand-new table should know why.
+-- added without a policy fails closed (no rows to anyone) instead of open. It predates
+-- these migrations and used to live only in the database; it is now also created by
+-- supabase/migrations/20260814085000_add_rls_auto_enable.sql, dated deliberately ahead
+-- of the harden migration that revokes on it, so that revoke has a function to act on
+-- instead of raising 42883.
+--
+-- That closes one ordering gap; it does not make the migrations self-sufficient. This
+-- file is still step 1 of Supabase setup in README.md: the base tables and
+-- public.set_updated_at() are created here and nowhere else, so `supabase/migrations`
+-- alone cannot rebuild the database.
 --
 -- It enables RLS and nothing else. A new table still needs its own policies, or
 -- every query against it returns `[]` with `error: null`.
@@ -329,33 +406,39 @@ create policy search_history_delete on public.search_history
 -- top to bottom in the dashboard SQL editor: a `revoke` on a function that was
 -- never created raises 42883 and takes every statement above it down with it.
 
-create or replace function public.rls_auto_enable()
-returns event_trigger
-language plpgsql
-security definer
-set search_path to 'pg_catalog'
-as $$
-declare
+CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
   cmd record;
-begin
-  for cmd in
-    select * from pg_event_trigger_ddl_commands()
-    where command_tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
-      and object_type in ('table', 'partitioned table')
-  loop
-    if cmd.schema_name = 'public' then
-      begin
-        execute format('alter table if exists %s enable row level security', cmd.object_identity);
-      exception when others then
-        raise log 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
-      end;
-    end if;
-  end loop;
-end;
-$$;
+BEGIN
+  FOR cmd IN
+    SELECT *
+    FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+      BEGIN
+        EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+      END;
+     ELSE
+        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+     END IF;
+  END LOOP;
+END;
+$function$;
 
 revoke execute on function public.rls_auto_enable() from anon, authenticated;
 revoke execute on function public.rls_auto_enable() from public;
+grant execute on function public.rls_auto_enable() to service_role;
 
 -- The function only runs when something calls it, and nothing does except this
 -- trigger. `ensure_rls` is the name it carries in the live project.
@@ -364,6 +447,7 @@ begin
   if not exists (select 1 from pg_event_trigger where evtname = 'ensure_rls') then
     create event trigger ensure_rls
       on ddl_command_end
+      when tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
       execute function public.rls_auto_enable();
   end if;
 end;
@@ -438,6 +522,10 @@ as $$
   from public.collections c
   left join public.notes n
     on n.collection_id = c.id
+   -- Same owner, or a note attached to this collection by someone else would render
+   -- on its share page. Belt to the composite foreign key's braces: this also covers
+   -- any row that predates that key.
+   and n.user_id = c.user_id
    and not n.archived
   where c.share_token = token
   order by n.pinned desc nulls last, n.created_at desc;

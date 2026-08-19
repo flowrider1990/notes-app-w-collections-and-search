@@ -84,8 +84,15 @@ returns **nothing**. Supabase is the only persistence layer.
 
 **8. No open redirect on auth returns.** Both `app/auth/callback/route.ts` and
 `app/auth/confirm/route.ts` pass their `?next=` through `safeNextPath()` from `lib/auth-redirect.ts`,
-which accepts in-app paths only and rejects protocol-relative `//host`. Three redirect sites, all
-guarded; no raw `redirect(next)`.
+which resolves the value against the request origin with the URL parser, requires the resolved origin
+to equal the application origin, and rejects a result whose path would begin with `//`. Three redirect
+sites, all guarded; no raw `redirect(next)`.
+
+A prefix test is **not** sufficient and is no longer used. Two ways it fails, both fixed here: `\` is
+`/` to a browser resolving a `Location:` header, so `/\evil.com` satisfies "starts with `/`, not `//`"
+and still lands on `evil.com`; and `/.//evil.com` resolves *to* this origin — passing an origin check
+on its own — yet normalises to the protocol-relative path `//evil.com`, which the browser then follows
+off-origin. Only the three-part invariant above closes both.
 
 ## Known and accepted
 
