@@ -95,8 +95,20 @@ Supabase-internal cookie store is fine; application data is not.
 ## 8. Open redirects on auth returns
 
 Both `app/auth/callback/route.ts` and `app/auth/confirm/route.ts` take a `?next=` from an email or a
-provider. Each must pass it through `safeNextPath()` in `lib/auth-redirect.ts`, which accepts in-app
-paths only and rejects `//host`. A raw `redirect(next)` is a finding.
+provider. Each must pass it through `safeNextPath()` in `lib/auth-redirect.ts`, and that function must
+hold all three parts of the invariant:
+
+- resolve the value against the request origin with the URL parser — `new URL(next, origin)` — rather
+  than inspecting how the string starts;
+- require the resolved origin to equal the application origin;
+- reject a result whose path would begin with `//`, which a browser reads as protocol-relative and
+  follows off-origin.
+
+A raw `redirect(next)` is a finding. So is a prefix test such as
+`startsWith("/") && !startsWith("//")`: it is not sufficient, because `\` is `/` to a browser, so
+`/\evil.com` passes it and leaves the origin. An origin check alone is not sufficient either —
+`/.//evil.com` resolves to this origin but normalises to `//evil.com`, so the returned path has to be
+checked as well.
 
 ## Report
 
