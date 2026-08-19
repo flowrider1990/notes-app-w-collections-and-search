@@ -379,10 +379,16 @@ create policy search_history_delete on public.search_history
 -- public.rls_auto_enable() — the safety net under all of the above
 -- ------------------------------------------------------------
 -- An event trigger that enables RLS on every table created in `public`, so a table
--- added without a policy fails closed (no rows to anyone) instead of open. It
--- predates these migrations and lives only in the database; it is recorded here
--- because docs/schema.sql is the current-state reference, and because a reader who
--- finds RLS already enabled on a brand-new table should know why.
+-- added without a policy fails closed (no rows to anyone) instead of open. It predates
+-- these migrations and used to live only in the database; it is now also created by
+-- supabase/migrations/20260814085000_add_rls_auto_enable.sql, dated deliberately ahead
+-- of the harden migration that revokes on it, so that revoke has a function to act on
+-- instead of raising 42883.
+--
+-- That closes one ordering gap; it does not make the migrations self-sufficient. This
+-- file is still step 1 of Supabase setup in README.md: the base tables and
+-- public.set_updated_at() are created here and nowhere else, so `supabase/migrations`
+-- alone cannot rebuild the database.
 --
 -- It enables RLS and nothing else. A new table still needs its own policies, or
 -- every query against it returns `[]` with `error: null`.
@@ -400,33 +406,39 @@ create policy search_history_delete on public.search_history
 -- top to bottom in the dashboard SQL editor: a `revoke` on a function that was
 -- never created raises 42883 and takes every statement above it down with it.
 
-create or replace function public.rls_auto_enable()
-returns event_trigger
-language plpgsql
-security definer
-set search_path to 'pg_catalog'
-as $$
-declare
+CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
   cmd record;
-begin
-  for cmd in
-    select * from pg_event_trigger_ddl_commands()
-    where command_tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
-      and object_type in ('table', 'partitioned table')
-  loop
-    if cmd.schema_name = 'public' then
-      begin
-        execute format('alter table if exists %s enable row level security', cmd.object_identity);
-      exception when others then
-        raise log 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
-      end;
-    end if;
-  end loop;
-end;
-$$;
+BEGIN
+  FOR cmd IN
+    SELECT *
+    FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+      BEGIN
+        EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+      END;
+     ELSE
+        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+     END IF;
+  END LOOP;
+END;
+$function$;
 
 revoke execute on function public.rls_auto_enable() from anon, authenticated;
 revoke execute on function public.rls_auto_enable() from public;
+grant execute on function public.rls_auto_enable() to service_role;
 
 -- The function only runs when something calls it, and nothing does except this
 -- trigger. `ensure_rls` is the name it carries in the live project.
@@ -435,6 +447,7 @@ begin
   if not exists (select 1 from pg_event_trigger where evtname = 'ensure_rls') then
     create event trigger ensure_rls
       on ddl_command_end
+      when tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
       execute function public.rls_auto_enable();
   end if;
 end;
