@@ -3,8 +3,22 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
 
-const defaultUrl = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
+/**
+ * What `metadataBase` resolves against is what a link preview will try to fetch, so
+ * it has to be an address a stranger can reach. `VERCEL_URL` is not: it is the
+ * generated per-deployment hostname, which answers every request with a redirect to
+ * Vercel's sign-in, so every og:image the app advertised was a 302 to a login page and
+ * no preview ever rendered one. `VERCEL_PROJECT_PRODUCTION_URL` is the production
+ * alias — the one public address — and it is set on preview builds too, which is what
+ * we want: a preview should point its images at the copy people can actually load.
+ * The `VERCEL_URL` fallback keeps the old behaviour if the newer variable is ever
+ * absent, rather than silently falling through to localhost.
+ */
+const productionUrl =
+  process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+
+const defaultUrl = productionUrl
+  ? `https://${productionUrl}`
   : "http://localhost:3000";
 
 export const metadata: Metadata = {
