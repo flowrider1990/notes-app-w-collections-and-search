@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/db/auth";
+import { UserFacingError, clientErrorMessage } from "@/lib/db/errors";
 import {
   addNoteImage,
   addTagToNote,
@@ -65,8 +66,25 @@ function revalidateWorkspace() {
  */
 export type ActionResult = { error: string | null };
 
+/**
+ * Turns a thrown error into what the browser is allowed to see.
+ *
+ * `clientErrorMessage` keeps the messages `lib/db/` wrote for the user and replaces
+ * everything else with `fallback` — see lib/db/errors.ts for why a Server Action's
+ * return value is the one place this mattered.
+ *
+ * The withheld text is logged rather than dropped. It is the only remaining record
+ * of what actually failed, and the user now sees a fixed sentence in its place, so
+ * without this a real database fault becomes undiagnosable. Only the suppressed
+ * branch is logged: a user-facing message is already on screen and a copy in the
+ * log adds nothing.
+ */
 function failure(cause: unknown, fallback: string): ActionResult {
-  return { error: cause instanceof Error ? cause.message : fallback };
+  if (!(cause instanceof UserFacingError)) {
+    console.error("[notes] action failed:", cause);
+  }
+
+  return { error: clientErrorMessage(cause, fallback) };
 }
 
 /**

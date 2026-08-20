@@ -1,5 +1,6 @@
 import "server-only";
 
+import { UserFacingError } from "@/lib/db/errors";
 import { createClient } from "@/lib/supabase/server";
 import { toTsQuery } from "@/lib/search-query";
 import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
@@ -223,7 +224,7 @@ type NoteRow = Omit<Note, "tags"> & {
  */
 function assertWriteHit(rows: unknown[] | null, subject: string): void {
   if ((rows ?? []).length === 0) {
-    throw new Error(`Could not ${subject}: it no longer exists.`);
+    throw new UserFacingError(`Could not ${subject}: it no longer exists.`);
   }
 }
 
@@ -409,7 +410,7 @@ export async function createCollection(name: string): Promise<Collection> {
   if (error) {
     // Same unique (user_id, name) constraint as renameCollection.
     if (error.code === "23505") {
-      throw new Error(`You already have a collection called "${name}".`);
+      throw new UserFacingError(`You already have a collection called "${name}".`);
     }
     throw new Error(`Could not create collection "${name}": ${error.message}`);
   }
@@ -430,7 +431,7 @@ export async function renameCollection(id: string, name: string): Promise<void> 
   const trimmed = name.trim();
 
   if (!trimmed) {
-    throw new Error("A collection needs a name.");
+    throw new UserFacingError("A collection needs a name.");
   }
 
   const { data, error } = await supabase
@@ -441,7 +442,7 @@ export async function renameCollection(id: string, name: string): Promise<void> 
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a collection called "${trimmed}".`);
+      throw new UserFacingError(`You already have a collection called "${trimmed}".`);
     }
     throw new Error(`Could not rename collection: ${error.message}`);
   }
@@ -472,7 +473,7 @@ export async function createNote(
 
   if (error) {
     if (isForeignCollection(error)) {
-      throw new Error(
+      throw new UserFacingError(
         "Could not create note: that collection does not exist, or belongs to another account.",
       );
     }
@@ -645,7 +646,7 @@ export async function setNoteCollection(
 
   if (error) {
     if (isForeignCollection(error)) {
-      throw new Error(
+      throw new UserFacingError(
         "Could not move note: that collection does not exist, or belongs to another account.",
       );
     }
@@ -759,6 +760,17 @@ export async function addTagToNote(noteId: string, name: string): Promise<void> 
       .single();
 
     if (insertError) {
+      // The lookup above found no such tag, so a unique violation here means
+      // another tab created it in between. `addTagToNoteAction` returns rather
+      // than throws precisely so this race is recoverable in a line of text, and
+      // retrying now takes the `existing` branch — so it needs a sentence the
+      // user can act on, not the generic fallback. Mirrors `createTag`.
+      if (insertError.code === "23505") {
+        throw new UserFacingError(
+          `The tag "${trimmed}" was just created somewhere else — add it again.`,
+        );
+      }
+
       throw new Error(`Could not create tag "${trimmed}": ${insertError.message}`);
     }
 
@@ -824,11 +836,11 @@ export async function createTag(name: string, color?: string): Promise<void> {
   const trimmed = name.trim();
 
   if (!trimmed) {
-    throw new Error("A tag needs a name.");
+    throw new UserFacingError("A tag needs a name.");
   }
 
   if (color !== undefined && !(TAG_COLORS as readonly string[]).includes(color)) {
-    throw new Error(`"${color}" is not one of the tag colours.`);
+    throw new UserFacingError("That is not one of the tag colours.");
   }
 
   const { error } = await supabase
@@ -839,7 +851,7 @@ export async function createTag(name: string, color?: string): Promise<void> {
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a tag called "${trimmed}".`);
+      throw new UserFacingError(`You already have a tag called "${trimmed}".`);
     }
     throw new Error(`Could not create tag "${trimmed}": ${error.message}`);
   }
@@ -873,14 +885,14 @@ export async function updateTag(
   if (changes.name !== undefined) {
     const trimmed = changes.name.trim();
     if (!trimmed) {
-      throw new Error("A tag needs a name.");
+      throw new UserFacingError("A tag needs a name.");
     }
     patch.name = trimmed;
   }
 
   if (changes.color !== undefined) {
     if (!(TAG_COLORS as readonly string[]).includes(changes.color)) {
-      throw new Error(`"${changes.color}" is not one of the tag colours.`);
+      throw new UserFacingError("That is not one of the tag colours.");
     }
     patch.color = changes.color as TagColor;
   }
@@ -897,7 +909,14 @@ export async function updateTag(
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a tag called "${patch.name}".`);
+      // A colour-only update has no name to quote, and cannot collide on one:
+      // both unique indexes are on the name. Guarded anyway, because this string
+      // is now blessed as user-facing text and `called "undefined"` would ship.
+      throw new UserFacingError(
+        patch.name
+          ? `You already have a tag called "${patch.name}".`
+          : "You already have a tag with that name.",
+      );
     }
     throw new Error(`Could not update tag: ${error.message}`);
   }
@@ -1228,15 +1247,15 @@ export async function addNoteImage(
   const extension = imageExtension(file.type);
 
   if (!extension) {
-    throw new Error("Images must be PNG, JPEG, WebP or GIF.");
+    throw new UserFacingError("Images must be PNG, JPEG, WebP or GIF.");
   }
 
   if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error("Images must be 5 MB or smaller.");
+    throw new UserFacingError("Images must be 5 MB or smaller.");
   }
 
   if (file.size === 0) {
-    throw new Error("That file is empty.");
+    throw new UserFacingError("That file is empty.");
   }
 
   const supabase = await createClient();
@@ -1298,7 +1317,7 @@ export async function deleteNoteImage(id: string): Promise<void> {
   }
 
   if (!data) {
-    throw new Error("Could not delete image: it no longer exists.");
+    throw new UserFacingError("Could not delete image: it no longer exists.");
   }
 
   const path = (data as { storage_path: string }).storage_path;
