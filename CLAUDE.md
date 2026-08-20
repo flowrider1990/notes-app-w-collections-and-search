@@ -94,9 +94,10 @@ Production and Preview.
 public at `https://notes-app-w-collections-and-search.vercel.app`. Anything served on that URL is on
 the public internet, so deployment configuration counts as part of the application rather than as
 someone else's problem: the HTTP security headers in `next.config.ts` are the clearest case, since a
-header only means something on a response a stranger can actually request. Those headers are in the
-source but not yet on the public URL — the live build predates them, and they arrive with the next
-deploy. Generated deployment URLs answer with a redirect to Vercel's sign-in; the production alias
+header only means something on a response a stranger can actually request. The headers are set by
+`headers()` in `next.config.ts` and are served by any build that includes it; the production alias
+serves whatever the last build promoted to production contained, which is not necessarily this
+commit. Generated deployment URLs answer with a redirect to Vercel's sign-in; the production alias
 above is the exception and is open to anyone.
 
 This file previously said there was no deployment step and no public URL. That was true once and had

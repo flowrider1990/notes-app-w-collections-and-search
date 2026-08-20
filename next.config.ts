@@ -52,7 +52,8 @@ const nextConfig: NextConfig = {
           // `SAMEORIGIN` — there is no iframe in the app, and no flow needs one:
           // OAuth is a full-page redirect. This is the stopgap. CSP
           // `frame-ancestors 'none'` supersedes it in modern browsers and is the
-          // real fix, but this app sends no CSP at all yet, and an unframed app
+          // real fix, but no page response here carries a CSP yet — only
+          // `/_next/image`, from the optimizer's own default — and an unframed app
           // beats waiting for one.
           { key: "X-Frame-Options", value: "DENY" },
         ],
