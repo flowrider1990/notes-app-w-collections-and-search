@@ -56,7 +56,7 @@ desktop.ini
 *.swo
 *~
 
-# vercel (unused — no deployment step)
+# vercel — local CLI state; can hold pulled .env values, so never committed
 .vercel
 
 # exercise scaffolding — local only, not part of the project
