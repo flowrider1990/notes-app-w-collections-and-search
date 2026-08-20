@@ -1,6 +1,10 @@
 import "server-only";
 
 import { UserFacingError } from "@/lib/db/errors";
+import {
+  SIGNATURE_BYTES,
+  detectImageFormat,
+} from "@/lib/db/image-signature";
 import { createClient } from "@/lib/supabase/server";
 import { toTsQuery } from "@/lib/search-query";
 import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
@@ -186,31 +190,14 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 const NOTE_IMAGE_COLUMNS = "id, storage_path, mime_type, size_bytes, created_at";
 
-/**
- * What may be attached, and how large. The bucket enforces both server-side; these
- * are here so the app can refuse a file without a round trip, and so the error the
- * user sees names the actual limit.
- */
-const ALLOWED_IMAGE_TYPES: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-};
+// Which formats may be attached lives in lib/db/image-signature.ts, keyed by the
+// bytes a file begins with rather than by the type its uploader claimed.
 
 /**
- * Looks up the extension for a MIME type, or null if it is not allowed.
- *
- * `Object.hasOwn` rather than a bare index: the type comes off an uploaded file, and
- * a plain lookup answers for inherited members too, so `Content-Type: toString` would
- * resolve to a function and read as permitted.
+ * How large an attachment may be. The bucket enforces this server-side too; it is
+ * here so the app can refuse a file without a round trip, and so the error the user
+ * sees names the actual limit.
  */
-function imageExtension(mimeType: string): string | null {
-  return Object.hasOwn(ALLOWED_IMAGE_TYPES, mimeType)
-    ? ALLOWED_IMAGE_TYPES[mimeType]
-    : null;
-}
-
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type NoteRow = Omit<Note, "tags"> & {
@@ -1270,9 +1257,35 @@ export async function addNoteImage(
   // `requireUser()` and is already canonical.
   const canonicalNoteId = noteId.toLowerCase();
 
-  const extension = imageExtension(file.type);
+  // Empty first, because a zero-byte file has no header to read and "that file is
+  // empty" is the useful thing to say about it. It was already reachable through the
+  // app — a browser takes `File.type` from the extension, not the content, so an
+  // empty `foo.png` carried `image/png` and reached this check. What changes is the
+  // file with no extension, which used to be turned away as the wrong format.
+  if (file.size === 0) {
+    throw new UserFacingError("That file is empty.");
+  }
 
-  if (!extension) {
+  // Only the header, and only as many bytes as the signature table can need. That
+  // avoids a second copy rather than avoiding the buffering: Next has already parsed
+  // the whole multipart body before this action runs, which is what
+  // `serverActions.bodySizeLimit` in next.config.ts bounds. For the same reason
+  // reading twelve bytes before the size check below costs nothing.
+  //
+  // `file.type` is deliberately not consulted, here or below. It is the Content-Type
+  // the client attached to its own multipart part, so it is a claim: calling the
+  // Server Action directly could store any bytes at all as `image/png`, and the
+  // extension in the object key was derived from that same string. The bucket's
+  // `allowed_mime_types` was no help either, since it checks the declared type too.
+  // The format decides the extension in the key, the `mime_type` recorded on the
+  // row, and the type Storage serves the object as, so all three now describe the
+  // bytes rather than repeating the uploader's word for them.
+  const header = new Uint8Array(
+    await file.slice(0, SIGNATURE_BYTES).arrayBuffer(),
+  );
+  const format = detectImageFormat(header);
+
+  if (!format) {
     throw new UserFacingError("Images must be PNG, JPEG, WebP or GIF.");
   }
 
@@ -1280,19 +1293,33 @@ export async function addNoteImage(
     throw new UserFacingError("Images must be 5 MB or smaller.");
   }
 
-  if (file.size === 0) {
-    throw new UserFacingError("That file is empty.");
-  }
-
   const supabase = await createClient();
 
   // A fresh uuid rather than the uploaded filename: two photos called IMG_0001.jpg
   // must not collide, and a name from the client has no business becoming a path.
-  const path = `${userId}/${canonicalNoteId}/${crypto.randomUUID()}.${extension}`;
+  const path = `${userId}/${canonicalNoteId}/${crypto.randomUUID()}.${format.extension}`;
+
+  // The body is re-wrapped so that its own `type` is the detected one, because the
+  // `contentType` option below cannot do that job alone: supabase-js applies it only
+  // when the body is *not* a Blob — see `uploadOrUpdate` in
+  // node_modules/@supabase/storage-js, which builds a FormData and appends the blob
+  // whenever `fileBody instanceof Blob`, and a `File` from FormData is one. So the
+  // multipart part, and therefore the Content-Type Storage stores and serves, comes
+  // from `File.type`. Leaving the client's value there would keep the served type
+  // uploader-controlled, would disagree with the `mime_type` recorded below, and
+  // would have the bucket's `allowed_mime_types` refuse a genuine image whose
+  // declared type was empty — an extensionless file picked through the "all files"
+  // escape hatch arrives with `type: ""`.
+  //
+  // The option is passed as well, not instead: it is the documented way to say this,
+  // and it starts working if the body ever stops being a Blob.
+  const body = new File([file], path.slice(path.lastIndexOf("/") + 1), {
+    type: format.mime,
+  });
 
   const { error: uploadError } = await supabase.storage
     .from(IMAGE_BUCKET)
-    .upload(path, file, { contentType: file.type, upsert: false });
+    .upload(path, body, { contentType: format.mime, upsert: false });
 
   if (uploadError) {
     throw new Error(`Could not upload image: ${uploadError.message}`);
@@ -1301,7 +1328,7 @@ export async function addNoteImage(
   const { error } = await supabase.from("note_images").insert({
     note_id: canonicalNoteId,
     storage_path: path,
-    mime_type: file.type,
+    mime_type: format.mime,
     size_bytes: file.size,
   });
 

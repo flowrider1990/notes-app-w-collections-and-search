@@ -30,6 +30,18 @@ function functionBody(name: string): string {
   return source.slice(open + 1, i - 1);
 }
 
+/**
+ * The same text with comments removed, so an assertion about what the code does is
+ * not satisfied — or defeated — by prose that merely mentions it. The `[^:]` guard
+ * keeps a `//` inside a URL from being read as a comment. Crude, and only ever used
+ * to make a negative assertion stricter.
+ */
+function codeOf(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*/g, "$1");
+}
+
 describe("the UUID_PATTERN addNoteImage validates against", () => {
   // No dotAll flag — the project targets ES2017 and it is not needed: the literal
   // holds no whitespace, and the `\s*` before it already crosses the line break.
@@ -135,6 +147,46 @@ describe("addNoteImage", () => {
     assert.ok(
       canonicalised < pathBuilt,
       "the object key is built before noteId is canonicalised",
+    );
+  });
+
+  /**
+   * The format decision must be made from the bytes, and must be what reaches
+   * Storage. These are source assertions for the same reason as the ordering ones:
+   * `detectImageFormat` is pure and cannot be fooled by a declared type, so nothing
+   * a unit test does to it would notice `contentType: file.type` coming back at the
+   * call site — which is exactly the mistake that shipped once already.
+   */
+  it("consults the file's bytes and never its declared type", () => {
+    assert.ok(
+      body.includes("detectImageFormat("),
+      "addNoteImage no longer detects the format from the file's bytes",
+    );
+    assert.ok(
+      !codeOf(body).includes("file.type"),
+      "addNoteImage reads file.type again — the declared type decides nothing here",
+    );
+  });
+
+  it("detects the format before uploading, and uploads the detected type", () => {
+    const detected = body.indexOf("detectImageFormat(");
+    const upload = body.indexOf(".upload(");
+
+    assert.ok(detected !== -1 && upload !== -1);
+    assert.ok(detected < upload, "bytes are uploaded before the format is checked");
+
+    // supabase-js drops the `contentType` option when the body is a Blob, so the
+    // body itself has to carry the detected type. Without this the object is stored
+    // and served as whatever the uploader declared.
+    const wrapped = body.indexOf("type: format.mime");
+    assert.ok(
+      wrapped !== -1,
+      "the upload body no longer carries the detected type, so Storage will use the declared one",
+    );
+    assert.ok(wrapped < upload, "the body is wrapped after it is uploaded");
+    assert.ok(
+      body.includes("${format.extension}"),
+      "the object key extension no longer comes from the detected format",
     );
   });
 

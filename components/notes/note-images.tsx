@@ -36,7 +36,10 @@ type NoteImagesProps = {
   images: NoteImageThumbnail[];
 };
 
-/** Mirrors the bucket's `allowed_mime_types`, so the picker offers only what will be accepted. */
+/** Mirrors the bucket's `allowed_mime_types`, so the picker offers only formats that
+ * can be accepted. It is a convenience, not the check: the picker filters on the
+ * declared type, while the server decides from the file's leading bytes, so a .png
+ * that is not a PNG gets through here and is refused there. */
 const ACCEPTED = "image/png,image/jpeg,image/webp,image/gif";
 
 /**

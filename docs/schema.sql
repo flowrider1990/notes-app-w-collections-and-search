@@ -606,12 +606,21 @@ set public = excluded.public,
 -- Tightened by supabase/migrations/20260820181531_bind_note_image_uploads_to_owned_note.sql.
 --
 -- The filename is pinned too: a lowercase uuid from `crypto.randomUUID()` and one of
--- the four extensions `imageExtension` can return. **That couples this policy to
--- `ALLOWED_IMAGE_TYPES` in lib/db/index.ts and nothing but this note links them** —
--- the same trap `TAG_COLORS` and `tags_color_check` carry. They are the map's
--- values, not its keys, so `image/jpeg` appears here as `jpg` and `jpeg` is absent;
--- adding an image type to the app without adding its extension here makes uploads of
--- that type fail at Storage, which a user only sees as "Could not attach the image."
+-- the four extensions the app can detect. **That couples this policy to the
+-- signature table in lib/db/image-signature.ts, and nothing but this note links
+-- them** — the same trap `TAG_COLORS` and `tags_color_check` carry. The list here is
+-- extensions, not MIME types, so `image/jpeg` appears as `jpg` and `jpeg` is absent;
+-- adding a format to that table without adding its extension here makes uploads of
+-- that format fail at Storage, which a user only sees as "Could not attach the
+-- image." The bucket's `allowed_mime_types` above is the third copy of the same
+-- fact, so a new format means editing all three.
+--
+-- The extension now describes the file's own header rather than the Content-Type its
+-- uploader claimed: `addNoteImage` reads the leading bytes, matches them against that
+-- table, and takes the extension, the recorded `mime_type` and the type Storage
+-- serves the object as from what it found. Before that, an attacker calling the
+-- Server Action directly could store arbitrary bytes as `image/png` — the bucket's
+-- `allowed_mime_types` was no defence, because it checks the declared type too.
 -- Pinning the filename also closed the one gap 181531 left open, where a trailing
 -- slash and no filename still split into two folders and was accepted.
 -- Added by supabase/migrations/20260820184328_constrain_note_image_object_filename.sql.
