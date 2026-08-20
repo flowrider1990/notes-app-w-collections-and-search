@@ -22,8 +22,8 @@ next-env.d.ts
 /coverage
 
 # environment — never commit these
-.env
-.env*.local
+.env*
+!.env.example
 
 # supabase local artifacts
 /supabase/.branches
