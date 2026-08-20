@@ -104,6 +104,17 @@ This file previously said there was no deployment step and no public URL. That w
 stopped being true, which is worse than saying nothing: it tells a reader that a whole category of
 risk does not apply here.
 
+**One Supabase project serves this app, and Production, Preview and local development all use it.**
+Each of the two Vercel variables is a single entry carrying a single value, so Production and
+Preview cannot hold different ones; `.env.local` names that same project again. This is a decision,
+not an oversight — a second project would have to be kept in step migration by migration, bucket and
+policies included, and it would buy back little: a generated deployment URL takes a sign-in, as
+above, so the only person who can write through a preview is the one who owns the data already.
+What follows from it is a working habit rather than a setting: anything you do against a
+preview deployment or a local dev server lands in the real notes, so treat destructive
+experiments — bulk deletes, archive clearing, migration trials — as production work, because they
+are. Revisit this if the app ever gains a second user.
+
 The Supabase CLI does **not** read `.env.local`; that file is a Next.js convention. The CLI takes its
 credentials from its own store (`supabase login`) or from `SUPABASE_ACCESS_TOKEN` in the process
 environment.
