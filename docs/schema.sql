@@ -643,7 +643,39 @@ create policy note_images_delete on public.note_images
   for delete to authenticated using (user_id = (select auth.uid()));
 
 -- ============================================================
--- 8. Verification
+-- 8. Table privileges
+-- ============================================================
+-- Supabase's stock grant hands every table in `public` to `anon` with the same full
+-- privilege set as `authenticated`. Nothing leaks through it — `anon` holds no policy on
+-- any of these tables and RLS is on for all six, so every row is denied — with one
+-- exception: TRUNCATE is not filtered by RLS, because policies are evaluated per row and
+-- TRUNCATE removes rows without visiting them. For that one command the grant is the only
+-- control, so it is revoked rather than relied upon.
+--
+-- Only `anon` is named. `authenticated` keeps everything, and no policy changes.
+--
+-- Share links are unaffected. `public.shared_collection(uuid)` in section 6 is
+-- `security definer` owned by `postgres`, so it reads `notes` and `collections` with the
+-- owner's rights. An anonymous visitor needs `usage` on schema `public` and `execute` on
+-- that function; neither is a table grant and neither is revoked here.
+--
+-- Applied by supabase/migrations/20260820152052_revoke_anon_table_grants.sql.
+--
+-- This covers the tables that exist. Default privileges still grant the full set to `anon`
+-- on every new table in `public`, so a table added later arrives with the grant back —
+-- add it to this list, or close it globally with
+-- `alter default privileges in schema public revoke all on tables from anon` for each
+-- granting role (`postgres` and `supabase_admin`), which is a project-wide decision.
+
+revoke all privileges on table public.collections    from anon;
+revoke all privileges on table public.note_images    from anon;
+revoke all privileges on table public.note_tags      from anon;
+revoke all privileges on table public.notes          from anon;
+revoke all privileges on table public.search_history from anon;
+revoke all privileges on table public.tags           from anon;
+
+-- ============================================================
+-- 9. Verification
 -- ============================================================
 -- Run these after the above. Expect six rows from the first, and policy rows for all
 -- six tables from the second.
@@ -671,3 +703,13 @@ create policy note_images_delete on public.note_images
 -- select p.proname, p.prosecdef, r.rolname, has_function_privilege(r.rolname, p.oid, 'execute')
 --   from pg_proc p, (select 'anon' as rolname union select 'authenticated') r
 --   where p.proname = 'shared_collection';
+
+-- After section 8, anon must hold no table privileges at all: expect zero rows here,
+-- and the same query with grantee 'authenticated' must still return all six tables.
+-- select table_name, privilege_type from information_schema.role_table_grants
+--   where table_schema = 'public' and grantee = 'anon';
+
+-- The two grants share links actually depend on, neither of them a table grant.
+-- Expect U for the schema and X for the function.
+-- select has_schema_privilege('anon', 'public', 'usage')      as schema_usage,
+--        has_function_privilege('anon', 'public.shared_collection(uuid)', 'execute') as fn_execute;
