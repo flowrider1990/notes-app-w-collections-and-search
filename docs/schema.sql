@@ -671,18 +671,28 @@ create policy note_images_delete on public.note_images
 -- TRUNCATE removes rows without visiting them. For that one command the grant is the only
 -- control, so it is revoked rather than relied upon.
 --
--- Only `anon` is named. `authenticated` keeps everything, and no policy changes.
+-- The same reasoning reaches `authenticated`, so TRUNCATE is revoked there too. That role is
+-- what every signed-in browser session assumes, and RLS does not constrain the one command it
+-- does not filter: `truncate public.notes` would take every user's notes, not the caller's rows.
+-- Nothing in the app can issue one -- PostgREST has no TRUNCATE verb -- and revoking it means
+-- the six tables no longer depend on that staying true. `authenticated` keeps SELECT, INSERT,
+-- UPDATE and DELETE, which are how the app works and are all filtered by section 4's policies.
+--
+-- No policy changes in this section, and `service_role` and `postgres` keep everything.
 --
 -- Share links are unaffected. `public.shared_collection(uuid)` in section 6 is
 -- `security definer` owned by `postgres`, so it reads `notes` and `collections` with the
 -- owner's rights. An anonymous visitor needs `usage` on schema `public` and `execute` on
 -- that function; neither is a table grant and neither is revoked here.
 --
--- Applied by supabase/migrations/20260820152052_revoke_anon_table_grants.sql.
+-- Applied by supabase/migrations/20260820152052_revoke_anon_table_grants.sql (anon) and
+-- supabase/migrations/20260820164046_revoke_authenticated_truncate.sql (authenticated).
 --
 -- This covers the tables that exist. The template new tables are stamped from is a separate
 -- thing, and it is closed in section 9 — a table added after that arrives without the `anon`
--- grant, so it no longer has to be added to this list by hand.
+-- grant, so it no longer has to be added to this list by hand. The `authenticated` half is not
+-- symmetrical: section 9 deliberately leaves that role its table defaults, so a seventh table
+-- arrives with TRUNCATE and needs a line adding to the second list below.
 
 revoke all privileges on table public.collections    from anon;
 revoke all privileges on table public.note_images    from anon;
@@ -690,6 +700,13 @@ revoke all privileges on table public.note_tags      from anon;
 revoke all privileges on table public.notes          from anon;
 revoke all privileges on table public.search_history from anon;
 revoke all privileges on table public.tags           from anon;
+
+revoke truncate on table public.collections    from authenticated;
+revoke truncate on table public.note_images    from authenticated;
+revoke truncate on table public.note_tags      from authenticated;
+revoke truncate on table public.notes          from authenticated;
+revoke truncate on table public.search_history from authenticated;
+revoke truncate on table public.tags           from authenticated;
 
 -- ============================================================
 -- 9. Default privileges
@@ -774,10 +791,19 @@ revoke all privileges on table public.tags           from anon;
 --   from pg_proc p, (select 'anon' as rolname union select 'authenticated') r
 --   where p.proname = 'shared_collection';
 
--- After section 8, anon must hold no table privileges at all: expect zero rows here,
--- and the same query with grantee 'authenticated' must still return all six tables.
+-- After section 8, anon must hold no table privileges at all: expect zero rows here.
 -- select table_name, privilege_type from information_schema.role_table_grants
 --   where table_schema = 'public' and grantee = 'anon';
+
+-- authenticated keeps the four commands the app runs, and must hold no TRUNCATE. Expect six
+-- rows, each reading exactly DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE, and has_truncate
+-- false on every one.
+-- select table_name,
+--        string_agg(privilege_type, ',' order by privilege_type) as privs,
+--        bool_or(privilege_type = 'TRUNCATE') as has_truncate
+--   from information_schema.role_table_grants
+--  where table_schema = 'public' and grantee = 'authenticated'
+--  group by table_name order by table_name;
 
 -- The two grants share links actually depend on, neither of them a table grant.
 -- Expect U for the schema and X for the function.
