@@ -638,9 +638,20 @@ create index if not exists note_images_user_id_idx on public.note_images (user_i
 alter table public.note_images enable row level security;
 
 -- INSERT checks the parent note as well as the owner, so a row cannot be attached to
--- someone else's note by passing its id. No UPDATE policy: an attachment row is only
--- ever created and deleted, and a policy for an operation nothing performs would only
--- widen the surface.
+-- someone else's note by passing its id, and it pins the first segment of
+-- `storage_path` to the caller's uid so a row cannot point at another user's prefix
+-- either. That third conjunct reuses `storage.foldername` from the storage.objects
+-- policies earlier in this section rather than re-deriving the segment, so the table
+-- and the bucket cannot disagree about where a file is allowed to live.
+-- Added by supabase/migrations/20260820171403_constrain_note_image_storage_path.sql.
+--
+-- No UPDATE policy: an attachment row is only ever created and deleted, and a policy
+-- for an operation nothing performs would only widen the surface. That is also what
+-- makes constraining INSERT enough — a storage_path cannot be rewritten later. It is
+-- a standing condition rather than a fact, though: `authenticated` still holds the
+-- UPDATE grant on this table (section 8 revoked only TRUNCATE), so adding an UPDATE
+-- policy here without carrying the storage_path conjunct into its WITH CHECK would
+-- reopen the hole — insert a conforming row, then patch the path to a foreign prefix.
 
 drop policy if exists note_images_select on public.note_images;
 create policy note_images_select on public.note_images
@@ -655,6 +666,7 @@ create policy note_images_insert on public.note_images
       select 1 from public.notes n
       where n.id = note_id and n.user_id = (select auth.uid())
     )
+    and (storage.foldername(storage_path))[1] = (select auth.uid())::text
   );
 
 drop policy if exists note_images_delete on public.note_images;
@@ -848,3 +860,28 @@ revoke truncate on table public.tags           from authenticated;
 -- select t.tgname, c.relname, t.tgenabled from pg_trigger t
 --   join pg_class c on c.oid = t.tgrelid
 --  where not t.tgisinternal and t.tgfoid = 'public.set_updated_at()'::regprocedure;
+
+-- Section 7's storage_path conjunct, read straight out of the catalogue rather than
+-- inferred from the migration. Expect one row whose with_check names all three
+-- checks: user_id, the exists(...) on notes, and foldername(storage_path). This is
+-- the query the migration's own DO block cannot be — it reads the live policy
+-- without dropping it first, so it is what catches a policy edited by hand in the
+-- dashboard. Run it after 20260820171403.
+-- select pol.polname,
+--        pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check
+--   from pg_policy pol
+--  where pol.polrelid = 'public.note_images'::regclass
+--    and pol.polname = 'note_images_insert';
+
+-- That conjunct calls into the storage schema, so it only holds if authenticated can
+-- still reach the function. Expect true/true — false on either means every note
+-- image insert is refused, not just cross-user ones.
+-- select has_schema_privilege('authenticated', 'storage', 'usage')  as schema_usage,
+--        has_function_privilege('authenticated', 'storage.foldername(text)', 'execute')
+--          as fn_execute;
+
+-- note_images must have no UPDATE policy: the storage_path conjunct above is on
+-- INSERT only, so an UPDATE policy without the same check would let a conforming row
+-- be patched to a foreign prefix. Expect zero rows.
+-- select policyname, cmd from pg_policies
+--  where schemaname = 'public' and tablename = 'note_images' and cmd = 'UPDATE';
