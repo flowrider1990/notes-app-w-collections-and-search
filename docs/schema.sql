@@ -603,13 +603,36 @@ set public = excluded.public,
 -- not help, as `AND` is not evaluated left to right. SELECT and DELETE still match
 -- on the first segment alone: that is what makes them the caller's own, and neither
 -- can bring an object into existence.
---
--- This enforces the shape and nothing more. The filename is unconstrained, so a
--- caller can still write unlimited unreferenced objects under a note id they own,
--- and `deleteNote` will not remove them because it enumerates `note_images` rows to
--- decide what to delete. Orphan accumulation is a separate, open concern; a depth
--- check is not a quota.
 -- Tightened by supabase/migrations/20260820181531_bind_note_image_uploads_to_owned_note.sql.
+--
+-- The filename is pinned too: a lowercase uuid from `crypto.randomUUID()` and one of
+-- the four extensions `imageExtension` can return. **That couples this policy to
+-- `ALLOWED_IMAGE_TYPES` in lib/db/index.ts and nothing but this note links them** —
+-- the same trap `TAG_COLORS` and `tags_color_check` carry. They are the map's
+-- values, not its keys, so `image/jpeg` appears here as `jpg` and `jpeg` is absent;
+-- adding an image type to the app without adding its extension here makes uploads of
+-- that type fail at Storage, which a user only sees as "Could not attach the image."
+-- Pinning the filename also closed the one gap 181531 left open, where a trailing
+-- slash and no filename still split into two folders and was accepted.
+-- Added by supabase/migrations/20260820184328_constrain_note_image_object_filename.sql.
+--
+-- All of this enforces the *shape* of a key, and none of it is a quota. A caller can
+-- still mint unlimited fresh uuids under a note they own — every one matching the
+-- pattern, none carrying a `note_images` row — and create unlimited notes to hold
+-- them. `deleteNote` will not remove those, because it enumerates `note_images` rows
+-- to decide what to delete. **Orphan accumulation is still open, by decision rather
+-- than oversight.**
+--
+-- What would close it is requiring a matching `note_images` row, and that cannot be
+-- written as a conjunct here, because `addNoteImage` uploads the bytes before it
+-- writes the row: at INSERT time there is nothing to match. Nor can the two writes
+-- share a transaction — the upload is an HTTP call to storage-api, which commits on
+-- its own connection before the PostgREST insert begins — which is why deferred
+-- constraints and a foreign key onto `note_images` are out too. The options that do
+-- exist, and why none was taken here, are recorded in the migration named below;
+-- the short version is that one changes the upload architecture, one pins this
+-- schema to storage-api internals, and one is a storage quota that wants a number
+-- chosen on purpose.
 
 drop policy if exists note_images_storage_insert on storage.objects;
 create policy note_images_storage_insert on storage.objects
@@ -624,6 +647,8 @@ create policy note_images_storage_insert on storage.objects
        where n.id::text = (storage.foldername(name))[2]
          and n.user_id = (select auth.uid())
     )
+    and storage.filename(name) ~
+      '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](png|jpg|webp|gif)$'
   );
 
 drop policy if exists note_images_storage_select on storage.objects;
@@ -914,10 +939,10 @@ revoke truncate on table public.tags           from authenticated;
 --  where schemaname = 'public' and tablename = 'note_images' and cmd = 'UPDATE';
 
 -- Section 7's upload binding, read out of the catalogue rather than inferred from
--- the migration. Expect one row whose with_check names all five checks: the bucket,
--- array_length, foldername[1], public.notes, and user_id. Reads without dropping
--- first, which is what the migration's own DO block cannot do. Run after
--- 20260820181531.
+-- the migration. Expect one row whose with_check names all six checks: the bucket,
+-- array_length, foldername[1], public.notes, user_id, and filename. Reads without
+-- dropping first, which is what the migration's own DO block cannot do. Run after
+-- 20260820184328.
 -- select pol.polname,
 --        pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check
 --   from pg_policy pol
@@ -941,4 +966,32 @@ revoke truncate on table public.tags           from authenticated;
 --             where n.id::text = (storage.foldername(o.name))[2]
 --               and n.user_id::text = (storage.foldername(o.name))[1]
 --          )
+--        );
+
+-- What the section 7 policies deliberately do not prevent, so it can at least be
+-- measured: objects in the bucket with no `note_images` row. Expect zero on a
+-- healthy project. A non-zero count is either an upload whose row insert failed and
+-- whose cleanup also failed, or a caller writing straight to the Storage API — the
+-- open half of the orphan concern, not a policy regression.
+-- select count(*) as orphaned_objects
+--   from storage.objects o
+--  where o.bucket_id = 'note-images'
+--    and not exists (
+--          select 1 from public.note_images ni where ni.storage_path = o.name
+--        );
+
+-- The converse: rows pointing at objects that are not there. Expect zero. These are
+-- visible in the app as an attachment that will not load, and can be removed through
+-- it — which is worth stating precisely, because the asymmetry runs the opposite way
+-- to the one that governs deletion. On delete, orphaned *objects* are the lesser
+-- evil, because the alternative is destroying bytes that cannot be recovered. On
+-- upload nothing is lost by not having uploaded, so the recoverable failure is the
+-- row without an object, and it is the current bytes-then-row order that fails into
+-- the unrecoverable one. That is an argument for the reservation order, not against
+-- it; the reason it has not been adopted is scope, not merit.
+-- select count(*) as rows_without_objects
+--   from public.note_images ni
+--  where not exists (
+--          select 1 from storage.objects o
+--           where o.bucket_id = 'note-images' and o.name = ni.storage_path
 --        );

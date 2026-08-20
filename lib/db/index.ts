@@ -1261,6 +1261,15 @@ export async function addNoteImage(
     throw new UserFacingError("That note does not exist.");
   }
 
+  // `UUID_PATTERN` carries the `i` flag, and Postgres renders a uuid in lowercase.
+  // So an uppercase id passed the check above, went verbatim into the object key,
+  // and was then refused by the storage policy, which compares that segment against
+  // `notes.id::text`. The two layers have to agree on one spelling and lowercase is
+  // the one the database produces, so it is normalised here rather than the policy
+  // being loosened to accept both. `userId` needs none of this: it comes from
+  // `requireUser()` and is already canonical.
+  const canonicalNoteId = noteId.toLowerCase();
+
   const extension = imageExtension(file.type);
 
   if (!extension) {
@@ -1279,7 +1288,7 @@ export async function addNoteImage(
 
   // A fresh uuid rather than the uploaded filename: two photos called IMG_0001.jpg
   // must not collide, and a name from the client has no business becoming a path.
-  const path = `${userId}/${noteId}/${crypto.randomUUID()}.${extension}`;
+  const path = `${userId}/${canonicalNoteId}/${crypto.randomUUID()}.${extension}`;
 
   const { error: uploadError } = await supabase.storage
     .from(IMAGE_BUCKET)
@@ -1290,7 +1299,7 @@ export async function addNoteImage(
   }
 
   const { error } = await supabase.from("note_images").insert({
-    note_id: noteId,
+    note_id: canonicalNoteId,
     storage_path: path,
     mime_type: file.type,
     size_bytes: file.size,

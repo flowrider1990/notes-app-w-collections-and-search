@@ -88,7 +88,8 @@ describe("addNoteImage", () => {
   // throw` rejects every valid upload and admits every invalid one, and would have
   // kept all four of these tests green.
   const guard = body.indexOf("!UUID_PATTERN.test(noteId)");
-  const pathBuilt = body.indexOf("${userId}/${noteId}/");
+  const canonicalised = body.indexOf("const canonicalNoteId = noteId.toLowerCase()");
+  const pathBuilt = body.indexOf("${userId}/${canonicalNoteId}/");
   const upload = body.indexOf(".upload(");
 
   it("rejects rather than accepts on a pattern match", () => {
@@ -105,10 +106,35 @@ describe("addNoteImage", () => {
   });
 
   it("validates before the object key is built from noteId", () => {
-    assert.notEqual(pathBuilt, -1, "the object key no longer interpolates noteId");
+    assert.notEqual(
+      pathBuilt,
+      -1,
+      "the object key no longer interpolates the canonicalised note id",
+    );
     assert.ok(
       guard < pathBuilt,
       "noteId is interpolated into the storage key before it is validated",
+    );
+  });
+
+  /**
+   * The storage policy compares the note-id segment against `notes.id::text`, which
+   * Postgres renders lowercase, while `UUID_PATTERN` carries the `i` flag and admits
+   * either case. Without this step an uppercase id passes validation, goes verbatim
+   * into the key, and is then refused by the policy — the app and the database
+   * disagreeing about the same path. It has to happen after the guard (so the value
+   * is known to be a uuid) and before the key (so the key gets the canonical form).
+   */
+  it("canonicalises noteId between validating it and building the key", () => {
+    assert.notEqual(
+      canonicalised,
+      -1,
+      "noteId is no longer lower-cased, so an uppercase id would build a key the storage policy refuses",
+    );
+    assert.ok(guard < canonicalised, "noteId is canonicalised before it is validated");
+    assert.ok(
+      canonicalised < pathBuilt,
+      "the object key is built before noteId is canonicalised",
     );
   });
 
