@@ -83,6 +83,40 @@ export type Note = {
   tags: Tag[];
 };
 
+/**
+ * A note as the sidebar's list renders it, and the shape `searchNotes` returns.
+ *
+ * A Server Action's return value is serialized and sent to the browser, so the
+ * result of a search is a server-to-client boundary as much as any prop. Returning
+ * `Note` made the database row's column list define that boundary: the next column
+ * added to `notes` — a moderation flag, a per-note sharing state, anything internal
+ * — would reach the browser through the search box with no code change and nothing
+ * to review.
+ *
+ * These seven fields are what the chain from the results downwards actually reads
+ * (`workspace-sidebar` filters on `tags`, `archived` and `collection_id`; `NoteCard`
+ * renders `title`, `body`, `pinned` and links by `id`). Of the two left out,
+ * `updated_at` is read once — by the sidebar's search fingerprint, over the
+ * server-rendered `notes` prop rather than over any search result — and
+ * `created_at` by nothing outside this query's ordering.
+ *
+ * `Pick` rather than a fresh literal: the field types stay tied to the row, so a
+ * column that changes type cannot quietly disagree with the DTO.
+ *
+ * Note what this deliberately does *not* do. `CollectionOption` and
+ * `NoteImageThumbnail` each declare the field they exclude as `?: never`, so
+ * handing over a whole row is a compile error. That guard cannot go here, because
+ * a full `Note` has to stay assignable: `app/notes/layout.tsx` feeds
+ * server-rendered `Note[]` down the same `CollectionGroup` and `NoteCard` path the
+ * search results take, and `?: never` would reject it. So the boundary here rests
+ * on `toNoteListItem` returning a literal and nothing else — a weaker guarantee,
+ * and the reason that function names its fields one by one instead of spreading.
+ */
+export type NoteListItem = Pick<
+  Note,
+  "id" | "collection_id" | "title" | "body" | "pinned" | "archived" | "tags"
+>;
+
 const NOTE_COLUMNS =
   "id, collection_id, title, body, pinned, archived, created_at, updated_at, note_tags(tags(id, name, color))";
 
@@ -181,6 +215,26 @@ function toNote({ note_tags, ...note }: NoteRow): Note {
 }
 
 /**
+ * Drops a full note to the fields a list needs.
+ *
+ * Applied after `toNote` rather than by selecting fewer columns: `NOTE_COLUMNS`
+ * carries the tag join that `toNote` flattens, and duplicating it to save two
+ * timestamps would put two column lists out of step for no measurable gain. The
+ * point of this function is the boundary, not the bytes off the wire.
+ */
+function toNoteListItem({
+  id,
+  collection_id,
+  title,
+  body,
+  pinned,
+  archived,
+  tags,
+}: Note): NoteListItem {
+  return { id, collection_id, title, body, pinned, archived, tags };
+}
+
+/**
  * Every note the signed-in user owns — pinned first, then newest first — each
  * with its tags.
  *
@@ -219,6 +273,9 @@ export async function getNotes(): Promise<Note[]> {
  * Returns `null` when the input has no searchable tokens, which means "no search",
  * not "no matches". The caller shows the unfiltered list instead of an empty one.
  *
+ * `NoteListItem`, not `Note`: this result is the one that travels back through a
+ * Server Action to the browser. See the type for what is left out and why.
+ *
  * The query string comes from `toTsQuery`, which strips tsquery operators: raw
  * user text reaching `to_tsquery` raises Postgres 42601 rather than matching
  * nothing. Omitting `type` is what makes supabase-js emit a raw `to_tsquery`,
@@ -226,7 +283,9 @@ export async function getNotes(): Promise<Note[]> {
  * `config` must stay 'english' to match the generated column, or the stems will
  * not line up and nothing will ever match.
  */
-export async function searchNotes(query: string): Promise<Note[] | null> {
+export async function searchNotes(
+  query: string,
+): Promise<NoteListItem[] | null> {
   const tsQuery = toTsQuery(query);
   if (!tsQuery) return null;
 
@@ -243,7 +302,9 @@ export async function searchNotes(query: string): Promise<Note[] | null> {
     throw new Error(`Could not search notes: ${error.message}`);
   }
 
-  return ((data ?? []) as unknown as NoteRow[]).map(toNote);
+  return ((data ?? []) as unknown as NoteRow[])
+    .map(toNote)
+    .map(toNoteListItem);
 }
 
 /** A single note with its tags, or null when no such note is visible. */

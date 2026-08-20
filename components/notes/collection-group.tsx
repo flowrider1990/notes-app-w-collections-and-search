@@ -11,12 +11,12 @@ import { NoteCard } from "@/components/notes/note-card";
 import { ShareCollection } from "@/components/notes/share-collection";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { Note } from "@/lib/db";
+import type { NoteListItem } from "@/lib/db";
 import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
 
 type CollectionGroupProps = {
   name: string;
-  notes: Note[];
+  notes: NoteListItem[];
   /**
    * How many notes the collection contains, independent of the active filter.
    * The badge reports the collection; the body lists what survived filtering.

@@ -27,6 +27,7 @@ import {
   updateNote,
   updateTag,
   type Note,
+  type NoteListItem,
 } from "@/lib/db";
 
 /**
@@ -267,10 +268,13 @@ export async function setNoteArchivedAction(
  *
  * `null` means the query held nothing searchable, which the caller renders as "no
  * search active" rather than "no matches".
+ *
+ * Returns `NoteListItem[]`, not `Note[]` — this value is serialized to the browser,
+ * and `lib/db` projects it. See that type for which fields and why.
  */
 export async function searchNotesAction(
   query: string,
-): Promise<{ error: string | null; notes: Note[] | null }> {
+): Promise<{ error: string | null; notes: NoteListItem[] | null }> {
   await requireUser();
 
   try {
