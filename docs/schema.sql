@@ -661,11 +661,9 @@ create policy note_images_delete on public.note_images
 --
 -- Applied by supabase/migrations/20260820152052_revoke_anon_table_grants.sql.
 --
--- This covers the tables that exist. Default privileges still grant the full set to `anon`
--- on every new table in `public`, so a table added later arrives with the grant back —
--- add it to this list, or close it globally with
--- `alter default privileges in schema public revoke all on tables from anon` for each
--- granting role (`postgres` and `supabase_admin`), which is a project-wide decision.
+-- This covers the tables that exist. The template new tables are stamped from is a separate
+-- thing, and it is closed in section 9 — a table added after that arrives without the `anon`
+-- grant, so it no longer has to be added to this list by hand.
 
 revoke all privileges on table public.collections    from anon;
 revoke all privileges on table public.note_images    from anon;
@@ -675,7 +673,60 @@ revoke all privileges on table public.search_history from anon;
 revoke all privileges on table public.tags           from anon;
 
 -- ============================================================
--- 9. Verification
+-- 9. Default privileges
+-- ============================================================
+-- Sections 6 and 8 fix the privileges on objects that exist. This one fixes the template
+-- every future object in `public` is stamped from, which is a different thing and was the
+-- gap behind both of them.
+--
+-- Supabase ships schema `public` with default ACLs that hand the full set to `anon` and to
+-- `authenticated`, from two granting roles (`postgres` and `supabase_admin`):
+--
+--     objtype 'f' (functions): {postgres=X,        anon=X,        authenticated=X,        service_role=X}
+--     objtype 'r' (tables):    {postgres=arwdDxtm, anon=arwdDxtm, authenticated=arwdDxtm, service_role=arwdDxtm}
+--
+-- The functions half is the sharp edge. `create function` in `public` produces an endpoint at
+-- /rest/v1/rpc/<name> that `anon` can call, with no `grant` written anywhere — and a
+-- `security definer` function runs as its owner with RLS bypassed. That is the exact shape
+-- this project asks contributors to write (see `shared_collection` in section 6), so the
+-- default works against the convention. Section 4's `rls_auto_enable` revoke at the top of
+-- this file exists only because of it.
+--
+-- After this, a new function is callable only once someone writes an explicit `grant execute`,
+-- and a new table arrives with nothing for `anon`. `authenticated` keeps its table defaults:
+-- every table here is meant to be reachable by a signed-in user and gated by RLS. `service_role`
+-- keeps everything — it is the trusted server-side key and never reaches a browser.
+--
+-- ALTER DEFAULT PRIVILEGES is prospective only. No existing ACL changes, so
+-- `shared_collection` stays executable by `anon`, `rls_auto_enable` stays not, and the six
+-- tables keep every `authenticated` grant. No RLS policy and nothing in `storage` is touched.
+--
+-- A default ACL is keyed to the role that CREATES the object, and the two granting roles are
+-- therefore not equally important here.
+--
+-- `postgres` is the row that governs everything this project makes, since migrations connect
+-- as `postgres`. Those two statements are mandatory: unguarded, no exception handler, and any
+-- failure aborts the migration. A silent skip would leave the hole open while the migration
+-- history claimed otherwise.
+--
+-- `supabase_admin` governs extensions and Supabase-managed objects, and nothing in this
+-- repository. Altering its defaults needs ADMIN OPTION on that role since PostgreSQL 16 (this
+-- project is on 17.6), which `postgres` does not hold on a hosted project and cannot grant
+-- itself. That pass is therefore pre-checked and, when not permitted, skipped with a WARNING
+-- naming what was and was not done. The attempt is still wrapped, but the handler catches
+-- `insufficient_privilege` and nothing else — a syntax error or any other failure propagates
+-- and aborts, the same as the `postgres` half.
+--
+-- Applied by supabase/migrations/20260820154942_close_public_default_privileges.sql. The
+-- effective statements, the first two unconditional and the second two conditional:
+
+-- alter default privileges for role postgres       in schema public revoke execute on functions from anon, authenticated;
+-- alter default privileges for role postgres       in schema public revoke all     on tables    from anon;
+-- alter default privileges for role supabase_admin in schema public revoke execute on functions from anon, authenticated;
+-- alter default privileges for role supabase_admin in schema public revoke all     on tables    from anon;
+
+-- ============================================================
+-- 10. Verification
 -- ============================================================
 -- Run these after the above. Expect six rows from the first, and policy rows for all
 -- six tables from the second.
@@ -713,3 +764,22 @@ revoke all privileges on table public.tags           from anon;
 -- Expect U for the schema and X for the function.
 -- select has_schema_privilege('anon', 'public', 'usage')      as schema_usage,
 --        has_function_privilege('anon', 'public.shared_collection(uuid)', 'execute') as fn_execute;
+
+-- Section 9. The `postgres` rows must show no `anon=` entry at all, and no
+-- `authenticated=X` on the function row. A `supabase_admin` row still carrying them is the
+-- documented skip, not a regression — application objects are not created by that role.
+-- select pg_get_userbyid(d.defaclrole) as granting_role,
+--        case d.defaclobjtype when 'r' then 'table' when 'f' then 'function'
+--             else d.defaclobjtype::text end as objtype,
+--        d.defaclacl::text as acl
+--   from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
+--  where n.nspname = 'public' and d.defaclobjtype in ('r','f')
+--  order by 1, 2;
+
+-- The prospective-only guarantee, checked against the objects that already exist.
+-- Expect shared_collection true/true and rls_auto_enable false/false, unchanged by section 9.
+-- select p.proname,
+--        has_function_privilege('anon',          p.oid, 'execute') as anon_exec,
+--        has_function_privilege('authenticated', p.oid, 'execute') as auth_exec
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--  where n.nspname = 'public' and p.proname in ('shared_collection', 'rls_auto_enable');
