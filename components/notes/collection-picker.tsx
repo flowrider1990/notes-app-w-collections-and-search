@@ -13,11 +13,40 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Collection } from "@/lib/db";
+
+/**
+ * The two fields this control renders, and deliberately not the `Collection` row
+ * they come from.
+ *
+ * A collection row also carries `share_token` — a bearer capability: whoever holds
+ * one reads that collection with no sign-in at all. This is defence in depth rather
+ * than a leak closed, and the distinction matters to anyone reasoning from here: the
+ * sidebar in `app/notes/layout.tsx` takes unprojected collections and renders those
+ * tokens as share links, so they are already in this document's payload on every
+ * `/notes/**` route, by design. What this type removes is a second copy, arriving
+ * through a control that displays nothing but names.
+ *
+ * `share_token?: never` is what removes it. Structural typing accepts a wider object
+ * wherever a narrower one is expected, so listing the two fields wanted is not on
+ * its own a refusal of the rest; naming the field that must be absent makes handing
+ * over a whole row a compile error. The guard is per-field and by name, so it holds
+ * this one door rather than every door.
+ *
+ * `is_shared` is named too, and not because a boolean is sensitive: `Collection` no
+ * longer carries `share_token` at all, so naming only that field would let a whole
+ * row through here again without a compile error. The guard has to name what the
+ * row actually has.
+ */
+type CollectionOption = {
+  id: string;
+  name: string;
+  share_token?: never;
+  is_shared?: never;
+};
 
 type CollectionPickerProps = {
   noteId: string;
-  collections: Collection[];
+  collections: CollectionOption[];
   currentCollectionId: string | null;
 };
 

@@ -1,0 +1,55 @@
+-- Close the inherited EXECUTE grant on public.set_updated_at().
+--
+-- Read off the linked project before this file was written:
+--
+--     public.set_updated_at() -> {=X/postgres, postgres=X/postgres, anon=X/postgres,
+--                                 authenticated=X/postgres, service_role=X/postgres}
+--
+-- The grantor after each slash is load-bearing. REVOKE only removes grants issued by the role
+-- running it, so this file is correct because `supabase db push` connects as `postgres` and
+-- `postgres` is the grantor throughout. Run as any other role it would warn and change nothing
+-- while still being recorded as applied.
+--
+-- That first entry with an empty grantee is PUBLIC: PostgreSQL grants EXECUTE on a new function
+-- to PUBLIC unless told otherwise. The `anon` and `authenticated` entries beside it come from
+-- Supabase's default ACL on schema `public`. Three ways in, none of them written by this project.
+--
+-- 20260820154942_close_public_default_privileges.sql shut the template that hands those out, but
+-- ALTER DEFAULT PRIVILEGES is prospective only -- it never touches an object that already exists.
+-- `set_updated_at` was created before it ran, so it kept the grants. This file takes them back,
+-- and is the same correction 20260814085000_add_rls_auto_enable.sql:94-96 already made for
+-- `rls_auto_enable()`, applied to the one function in `public` still carrying the default.
+--
+-- What an attacker gets today: nothing. PostgREST does not publish a function returning `trigger`,
+-- so there is no /rest/v1/rpc/set_updated_at to call, and the function is `security invoker`, so
+-- reaching it by another route would run it with the caller's own privileges. This is hygiene --
+-- the last inherited *function* grant in `public`, closed so section 9's rule holds without an
+-- exception. It is not the last inherited grant of any kind: `authenticated` still holds Supabase's
+-- stock table grants on all six tables, kept deliberately by 20260820154942.
+--
+-- All three statements are needed, and the third is the one that does the work. `anon` holds
+-- EXECUTE twice: once by name and once through PUBLIC. Revoking only the named grants would leave
+-- the PUBLIC entry standing and change nothing that `has_function_privilege` reports.
+--
+-- What keeps working:
+--
+--   * The `notes_set_updated_at` trigger on public.notes. PostgreSQL checks EXECUTE on a trigger
+--     function when the trigger is CREATED, not each time it fires -- the trigger already exists,
+--     and firing it performs no privilege check on the function. A signed-in user's UPDATE still
+--     bumps `updated_at`.
+--   * Re-running docs/schema.sql. `postgres` owns the function and keeps EXECUTE as owner, so the
+--     `create trigger` in section 3 still passes the creation-time check.
+--
+-- `service_role` keeps its grant, matching how `rls_auto_enable()` was left. It is the trusted
+-- server-side key, never exposed to a browser (CLAUDE.md rule 5), and dropping it would buy
+-- nothing while breaking a future admin path that recreates the trigger.
+--
+-- Nothing here touches the function body, the trigger, any RLS policy, any table grant, or
+-- storage. Idempotent on replay: revoking a privilege a role does not hold is a no-op. It does
+-- assume the function exists -- `set_updated_at` is created by docs/schema.sql, not by any
+-- migration, so a migrations-only rebuild aborts here with 42883. That is the project's existing
+-- model, and 20260814085033_harden_rls_policies.sql:190 already depends on it the same way.
+
+revoke execute on function public.set_updated_at() from anon;
+revoke execute on function public.set_updated_at() from authenticated;
+revoke execute on function public.set_updated_at() from public;

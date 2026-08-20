@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireUser } from "@/lib/db/auth";
+import { UserFacingError, clientErrorMessage } from "@/lib/db/errors";
 import {
   addNoteImage,
   addTagToNote,
@@ -14,6 +15,7 @@ import {
   deleteNote,
   deleteNoteImage,
   deleteTag,
+  getCollectionShareToken,
   recordSearch,
   removeSearchHistoryEntry,
   removeTagFromNote,
@@ -27,6 +29,7 @@ import {
   updateNote,
   updateTag,
   type Note,
+  type NoteListItem,
 } from "@/lib/db";
 
 /**
@@ -63,8 +66,25 @@ function revalidateWorkspace() {
  */
 export type ActionResult = { error: string | null };
 
+/**
+ * Turns a thrown error into what the browser is allowed to see.
+ *
+ * `clientErrorMessage` keeps the messages `lib/db/` wrote for the user and replaces
+ * everything else with `fallback` — see lib/db/errors.ts for why a Server Action's
+ * return value is the one place this mattered.
+ *
+ * The withheld text is logged rather than dropped. It is the only remaining record
+ * of what actually failed, and the user now sees a fixed sentence in its place, so
+ * without this a real database fault becomes undiagnosable. Only the suppressed
+ * branch is logged: a user-facing message is already on screen and a copy in the
+ * log adds nothing.
+ */
 function failure(cause: unknown, fallback: string): ActionResult {
-  return { error: cause instanceof Error ? cause.message : fallback };
+  if (!(cause instanceof UserFacingError)) {
+    console.error("[notes] action failed:", cause);
+  }
+
+  return { error: clientErrorMessage(cause, fallback) };
 }
 
 /**
@@ -267,16 +287,42 @@ export async function setNoteArchivedAction(
  *
  * `null` means the query held nothing searchable, which the caller renders as "no
  * search active" rather than "no matches".
+ *
+ * Returns `NoteListItem[]`, not `Note[]` — this value is serialized to the browser,
+ * and `lib/db` projects it. See that type for which fields and why.
  */
 export async function searchNotesAction(
   query: string,
-): Promise<{ error: string | null; notes: Note[] | null }> {
+): Promise<{ error: string | null; notes: NoteListItem[] | null }> {
   await requireUser();
 
   try {
     return { error: null, notes: await searchNotes(query) };
   } catch (cause) {
     return { ...failure(cause, "Could not search notes."), notes: null };
+  }
+}
+
+/**
+ * The share token for one collection, read when the share menu opens.
+ *
+ * The list the sidebar renders carries only `is_shared`, so the token has to be
+ * asked for separately — see the `Collection` type in lib/db for why. Returns null
+ * for a collection that is private, gone, or not the caller's: those are one answer
+ * from here, and the menu has nothing different to show for any of them.
+ */
+export async function getCollectionShareTokenAction(
+  id: string,
+): Promise<{ error: string | null; token: string | null }> {
+  await requireUser();
+
+  try {
+    return { error: null, token: await getCollectionShareToken(id) };
+  } catch (cause) {
+    return {
+      ...failure(cause, "Could not load the share link."),
+      token: null,
+    };
   }
 }
 

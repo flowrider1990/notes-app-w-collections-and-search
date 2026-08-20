@@ -13,7 +13,13 @@ import { TagPill } from "@/components/notes/tag-pill";
 import { Input } from "@/components/ui/input";
 import { SectionLabel } from "@/components/ui/section-label";
 import { cn } from "@/lib/utils";
-import type { Collection, Note, SearchHistoryEntry, Tag } from "@/lib/db";
+import type {
+  Collection,
+  Note,
+  NoteListItem,
+  SearchHistoryEntry,
+  Tag,
+} from "@/lib/db";
 
 type WorkspaceSidebarProps = {
   notes: Note[];
@@ -46,8 +52,14 @@ export function WorkspaceSidebar({
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   /** Whether the Tags section is showing filter pills or the rename/delete rows. */
   const [managingTags, setManagingTags] = useState(false);
-  /** Server search results. `null` means no active search — render everything. */
-  const [results, setResults] = useState<Note[] | null>(null);
+  /**
+   * Server search results. `null` means no active search — render everything.
+   *
+   * `NoteListItem`, the narrowed shape the action returns, rather than `Note`. A
+   * full `Note` still satisfies it, so the server-rendered `notes` prop feeds the
+   * same list path below without a conversion.
+   */
+  const [results, setResults] = useState<NoteListItem[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searching, startSearchTransition] = useTransition();
   const [, startRecordTransition] = useTransition();
@@ -360,7 +372,7 @@ export function WorkspaceSidebar({
                 <CollectionGroup
                   key={collection.id}
                   collectionId={collection.id}
-                  shareToken={collection.share_token}
+                  isShared={collection.is_shared}
                   name={collection.name}
                   notes={inCollection}
                   totalCount={totalInCollection}

@@ -12,7 +12,7 @@ import {
 import { TagPill } from "@/components/notes/tag-pill";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { Note } from "@/lib/db";
+import type { NoteListItem } from "@/lib/db";
 import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
 
 /**
@@ -29,7 +29,7 @@ import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
  * chooses as the source — usually the inner anchor, since links are draggable by
  * default — and bubbles here, so one handler covers every case.
  */
-export function NoteCard({ note }: { note: Note }) {
+export function NoteCard({ note }: { note: NoteListItem }) {
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [pending, startTransition] = useTransition();

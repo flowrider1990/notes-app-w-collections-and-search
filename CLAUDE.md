@@ -86,8 +86,23 @@ the brief and the README both name 3000.
 
 `.env.local` must exist before the dev server starts or the app throws on boot. It needs
 `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — the newer key name, whose
-value starts with `sb_publishable_` rather than being a legacy `eyJ…` anon JWT. There is no
-deployment step and no public URL.
+value starts with `sb_publishable_` rather than being a legacy `eyJ…` anon JWT. `.env.local` covers
+local development only: the same two variables are also set on the Vercel project, targeted at
+Production and Preview.
+
+**There is a deployment.** The app runs on Vercel — project `notes-app-w-collections-and-search`,
+public at `https://notes-app-w-collections-and-search.vercel.app`. Anything served on that URL is on
+the public internet, so deployment configuration counts as part of the application rather than as
+someone else's problem: the HTTP security headers in `next.config.ts` are the clearest case, since a
+header only means something on a response a stranger can actually request. The headers are set by
+`headers()` in `next.config.ts` and are served by any build that includes it; the production alias
+serves whatever the last build promoted to production contained, which is not necessarily this
+commit. Generated deployment URLs answer with a redirect to Vercel's sign-in; the production alias
+above is the exception and is open to anyone.
+
+This file previously said there was no deployment step and no public URL. That was true once and had
+stopped being true, which is worse than saying nothing: it tells a reader that a whole category of
+risk does not apply here.
 
 The Supabase CLI does **not** read `.env.local`; that file is a Next.js convention. The CLI takes its
 credentials from its own store (`supabase login`) or from `SUPABASE_ACCESS_TOKEN` in the process

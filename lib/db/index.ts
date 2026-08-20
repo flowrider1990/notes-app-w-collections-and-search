@@ -1,3 +1,10 @@
+import "server-only";
+
+import { UserFacingError } from "@/lib/db/errors";
+import {
+  SIGNATURE_BYTES,
+  detectImageFormat,
+} from "@/lib/db/image-signature";
 import { createClient } from "@/lib/supabase/server";
 import { toTsQuery } from "@/lib/search-query";
 import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
@@ -13,6 +20,15 @@ import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
  *
  * RLS scopes every table to `user_id = auth.uid()`, so none of these queries
  * filter by user — the database does it, and no filter here could be safer.
+ *
+ * `import "server-only"` is the boundary that keeps it that way. Every client
+ * component that imports the types below does so with `import type`, which erases
+ * at compile time, so the marker costs them nothing. What it buys is the
+ * error message: a mistaken *value* import was already refused, because this
+ * module transitively reaches `next/headers`, but that failure is reported as
+ * "you are using it in the Pages Router" — true of nothing here. The marker
+ * makes the build say `'server-only' cannot be imported from a Client
+ * Component module` instead.
  */
 
 export type Tag = {
@@ -22,13 +38,49 @@ export type Tag = {
   color: string;
 };
 
+/**
+ * A collection as the workspace lists it.
+ *
+ * `is_shared` rather than the token itself. The sidebar renders one of these per
+ * collection, and every prop a client component holds is serialised into the
+ * payload the browser receives — so carrying `share_token` here put a bearer
+ * capability, the one thing that grants anonymous read of the collection, into
+ * every `/notes` response, for every collection, whether or not its share menu was
+ * ever opened. RLS never let a stranger read it, but the owner's own tokens had no
+ * reason to be there. The list only needs to know *whether* a link exists;
+ * `getCollectionShareToken` fetches the token when the menu is actually open.
+ */
 export type Collection = {
   id: string;
   name: string;
-  /** Null when private. Non-null makes the collection readable by link. */
+  /** Whether a share link exists. The token itself is fetched on demand. */
+  is_shared: boolean;
+  created_at: string;
+};
+
+/** The `collections` columns as Postgres returns them, before the projection below. */
+type CollectionRow = {
+  id: string;
+  name: string;
   share_token: string | null;
   created_at: string;
 };
+
+/**
+ * Projects a collection row to what a client component may hold.
+ *
+ * Mirrors `toNoteListItem`: the point of this function is the boundary, not the
+ * bytes off the wire. `share_token` is still selected, because `is_shared` is
+ * derived from it and PostgREST cannot compute the boolean — it just stops here.
+ */
+function toCollection({
+  id,
+  name,
+  share_token,
+  created_at,
+}: CollectionRow): Collection {
+  return { id, name, is_shared: share_token !== null, created_at };
+}
 
 /** A shared collection as an anonymous visitor sees it: a name and bare notes. */
 export type SharedCollection = {
@@ -72,12 +124,57 @@ export type Note = {
   tags: Tag[];
 };
 
+/**
+ * A note as the sidebar's list renders it, and the shape `searchNotes` returns.
+ *
+ * A Server Action's return value is serialized and sent to the browser, so the
+ * result of a search is a server-to-client boundary as much as any prop. Returning
+ * `Note` made the database row's column list define that boundary: the next column
+ * added to `notes` — a moderation flag, a per-note sharing state, anything internal
+ * — would reach the browser through the search box with no code change and nothing
+ * to review.
+ *
+ * These seven fields are what the chain from the results downwards actually reads
+ * (`workspace-sidebar` filters on `tags`, `archived` and `collection_id`; `NoteCard`
+ * renders `title`, `body`, `pinned` and links by `id`). Of the two left out,
+ * `updated_at` is read once — by the sidebar's search fingerprint, over the
+ * server-rendered `notes` prop rather than over any search result — and
+ * `created_at` by nothing outside this query's ordering.
+ *
+ * `Pick` rather than a fresh literal: the field types stay tied to the row, so a
+ * column that changes type cannot quietly disagree with the DTO.
+ *
+ * Note what this deliberately does *not* do. `CollectionOption` and
+ * `NoteImageThumbnail` each declare the field they exclude as `?: never`, so
+ * handing over a whole row is a compile error. That guard cannot go here, because
+ * a full `Note` has to stay assignable: `app/notes/layout.tsx` feeds
+ * server-rendered `Note[]` down the same `CollectionGroup` and `NoteCard` path the
+ * search results take, and `?: never` would reject it. So the boundary here rests
+ * on `toNoteListItem` returning a literal and nothing else — a weaker guarantee,
+ * and the reason that function names its fields one by one instead of spreading.
+ */
+export type NoteListItem = Pick<
+  Note,
+  "id" | "collection_id" | "title" | "body" | "pinned" | "archived" | "tags"
+>;
+
 const NOTE_COLUMNS =
   "id, collection_id, title, body, pinned, archived, created_at, updated_at, note_tags(tags(id, name, color))";
 
+// The row shape, not the DTO: `share_token` is read so `toCollection` can derive
+// `is_shared` from it, and is dropped there rather than sent to the client.
 const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 
-/** Guards the one query whose argument comes from a URL rather than from a row. */
+/**
+ * Guards the uuid arguments that do not come from a row we just read: the share
+ * token out of a URL, the collection id a client component asks about, and the
+ * note id `addNoteImage` interpolates into a Storage object key.
+ *
+ * Two different reasons, so both are worth stating. For the queries, `.eq` on a
+ * uuid column raises 42P02 on anything malformed. For the object key there is no
+ * column to complain — the value becomes part of a path, and the check is what
+ * keeps an unvalidated one from being written and then swept up again.
+ */
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -93,31 +190,14 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 const NOTE_IMAGE_COLUMNS = "id, storage_path, mime_type, size_bytes, created_at";
 
-/**
- * What may be attached, and how large. The bucket enforces both server-side; these
- * are here so the app can refuse a file without a round trip, and so the error the
- * user sees names the actual limit.
- */
-const ALLOWED_IMAGE_TYPES: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-};
+// Which formats may be attached lives in lib/db/image-signature.ts, keyed by the
+// bytes a file begins with rather than by the type its uploader claimed.
 
 /**
- * Looks up the extension for a MIME type, or null if it is not allowed.
- *
- * `Object.hasOwn` rather than a bare index: the type comes off an uploaded file, and
- * a plain lookup answers for inherited members too, so `Content-Type: toString` would
- * resolve to a function and read as permitted.
+ * How large an attachment may be. The bucket enforces this server-side too; it is
+ * here so the app can refuse a file without a round trip, and so the error the user
+ * sees names the actual limit.
  */
-function imageExtension(mimeType: string): string | null {
-  return Object.hasOwn(ALLOWED_IMAGE_TYPES, mimeType)
-    ? ALLOWED_IMAGE_TYPES[mimeType]
-    : null;
-}
-
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type NoteRow = Omit<Note, "tags"> & {
@@ -136,7 +216,7 @@ type NoteRow = Omit<Note, "tags"> & {
  */
 function assertWriteHit(rows: unknown[] | null, subject: string): void {
   if ((rows ?? []).length === 0) {
-    throw new Error(`Could not ${subject}: it no longer exists.`);
+    throw new UserFacingError(`Could not ${subject}: it no longer exists.`);
   }
 }
 
@@ -167,6 +247,26 @@ function toNote({ note_tags, ...note }: NoteRow): Note {
   });
 
   return { ...note, tags };
+}
+
+/**
+ * Drops a full note to the fields a list needs.
+ *
+ * Applied after `toNote` rather than by selecting fewer columns: `NOTE_COLUMNS`
+ * carries the tag join that `toNote` flattens, and duplicating it to save two
+ * timestamps would put two column lists out of step for no measurable gain. The
+ * point of this function is the boundary, not the bytes off the wire.
+ */
+function toNoteListItem({
+  id,
+  collection_id,
+  title,
+  body,
+  pinned,
+  archived,
+  tags,
+}: Note): NoteListItem {
+  return { id, collection_id, title, body, pinned, archived, tags };
 }
 
 /**
@@ -208,6 +308,9 @@ export async function getNotes(): Promise<Note[]> {
  * Returns `null` when the input has no searchable tokens, which means "no search",
  * not "no matches". The caller shows the unfiltered list instead of an empty one.
  *
+ * `NoteListItem`, not `Note`: this result is the one that travels back through a
+ * Server Action to the browser. See the type for what is left out and why.
+ *
  * The query string comes from `toTsQuery`, which strips tsquery operators: raw
  * user text reaching `to_tsquery` raises Postgres 42601 rather than matching
  * nothing. Omitting `type` is what makes supabase-js emit a raw `to_tsquery`,
@@ -215,7 +318,9 @@ export async function getNotes(): Promise<Note[]> {
  * `config` must stay 'english' to match the generated column, or the stems will
  * not line up and nothing will ever match.
  */
-export async function searchNotes(query: string): Promise<Note[] | null> {
+export async function searchNotes(
+  query: string,
+): Promise<NoteListItem[] | null> {
   const tsQuery = toTsQuery(query);
   if (!tsQuery) return null;
 
@@ -232,7 +337,9 @@ export async function searchNotes(query: string): Promise<Note[] | null> {
     throw new Error(`Could not search notes: ${error.message}`);
   }
 
-  return ((data ?? []) as unknown as NoteRow[]).map(toNote);
+  return ((data ?? []) as unknown as NoteRow[])
+    .map(toNote)
+    .map(toNoteListItem);
 }
 
 /** A single note with its tags, or null when no such note is visible. */
@@ -264,7 +371,7 @@ export async function getCollections(): Promise<Collection[]> {
     throw new Error(`Could not load collections: ${error.message}`);
   }
 
-  return (data ?? []) as Collection[];
+  return ((data ?? []) as CollectionRow[]).map(toCollection);
 }
 
 export async function getTags(): Promise<Tag[]> {
@@ -295,12 +402,12 @@ export async function createCollection(name: string): Promise<Collection> {
   if (error) {
     // Same unique (user_id, name) constraint as renameCollection.
     if (error.code === "23505") {
-      throw new Error(`You already have a collection called "${name}".`);
+      throw new UserFacingError(`You already have a collection called "${name}".`);
     }
     throw new Error(`Could not create collection "${name}": ${error.message}`);
   }
 
-  return data as Collection;
+  return toCollection(data as CollectionRow);
 }
 
 /**
@@ -316,7 +423,7 @@ export async function renameCollection(id: string, name: string): Promise<void> 
   const trimmed = name.trim();
 
   if (!trimmed) {
-    throw new Error("A collection needs a name.");
+    throw new UserFacingError("A collection needs a name.");
   }
 
   const { data, error } = await supabase
@@ -327,7 +434,7 @@ export async function renameCollection(id: string, name: string): Promise<void> 
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a collection called "${trimmed}".`);
+      throw new UserFacingError(`You already have a collection called "${trimmed}".`);
     }
     throw new Error(`Could not rename collection: ${error.message}`);
   }
@@ -358,7 +465,7 @@ export async function createNote(
 
   if (error) {
     if (isForeignCollection(error)) {
-      throw new Error(
+      throw new UserFacingError(
         "Could not create note: that collection does not exist, or belongs to another account.",
       );
     }
@@ -531,7 +638,7 @@ export async function setNoteCollection(
 
   if (error) {
     if (isForeignCollection(error)) {
-      throw new Error(
+      throw new UserFacingError(
         "Could not move note: that collection does not exist, or belongs to another account.",
       );
     }
@@ -645,6 +752,17 @@ export async function addTagToNote(noteId: string, name: string): Promise<void> 
       .single();
 
     if (insertError) {
+      // The lookup above found no such tag, so a unique violation here means
+      // another tab created it in between. `addTagToNoteAction` returns rather
+      // than throws precisely so this race is recoverable in a line of text, and
+      // retrying now takes the `existing` branch — so it needs a sentence the
+      // user can act on, not the generic fallback. Mirrors `createTag`.
+      if (insertError.code === "23505") {
+        throw new UserFacingError(
+          `The tag "${trimmed}" was just created somewhere else — add it again.`,
+        );
+      }
+
       throw new Error(`Could not create tag "${trimmed}": ${insertError.message}`);
     }
 
@@ -710,11 +828,11 @@ export async function createTag(name: string, color?: string): Promise<void> {
   const trimmed = name.trim();
 
   if (!trimmed) {
-    throw new Error("A tag needs a name.");
+    throw new UserFacingError("A tag needs a name.");
   }
 
   if (color !== undefined && !(TAG_COLORS as readonly string[]).includes(color)) {
-    throw new Error(`"${color}" is not one of the tag colours.`);
+    throw new UserFacingError("That is not one of the tag colours.");
   }
 
   const { error } = await supabase
@@ -725,7 +843,7 @@ export async function createTag(name: string, color?: string): Promise<void> {
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a tag called "${trimmed}".`);
+      throw new UserFacingError(`You already have a tag called "${trimmed}".`);
     }
     throw new Error(`Could not create tag "${trimmed}": ${error.message}`);
   }
@@ -759,14 +877,14 @@ export async function updateTag(
   if (changes.name !== undefined) {
     const trimmed = changes.name.trim();
     if (!trimmed) {
-      throw new Error("A tag needs a name.");
+      throw new UserFacingError("A tag needs a name.");
     }
     patch.name = trimmed;
   }
 
   if (changes.color !== undefined) {
     if (!(TAG_COLORS as readonly string[]).includes(changes.color)) {
-      throw new Error(`"${changes.color}" is not one of the tag colours.`);
+      throw new UserFacingError("That is not one of the tag colours.");
     }
     patch.color = changes.color as TagColor;
   }
@@ -783,7 +901,14 @@ export async function updateTag(
 
   if (error) {
     if (error.code === "23505") {
-      throw new Error(`You already have a tag called "${patch.name}".`);
+      // A colour-only update has no name to quote, and cannot collide on one:
+      // both unique indexes are on the name. Guarded anyway, because this string
+      // is now blessed as user-facing text and `called "undefined"` would ship.
+      throw new UserFacingError(
+        patch.name
+          ? `You already have a tag called "${patch.name}".`
+          : "You already have a tag with that name.",
+      );
     }
     throw new Error(`Could not update tag: ${error.message}`);
   }
@@ -817,6 +942,42 @@ export async function deleteTag(id: string): Promise<void> {
   }
 
   assertWriteHit(data, "delete that tag");
+}
+
+/**
+ * The share token for one collection, or null when it is private.
+ *
+ * Split out of `getCollections` so the token travels only when the share menu is
+ * actually open — see the `Collection` type for why the list carries a boolean
+ * instead. RLS scopes the select, so an id belonging to someone else finds no row
+ * and returns null, which is the same answer a private collection gives: the menu
+ * shows the same thing either way, and there is nothing here to distinguish for a
+ * caller who should not have asked.
+ *
+ * No `assertWriteHit` — this is a read, and finding nothing is an answer rather
+ * than a write that silently matched no rows.
+ */
+export async function getCollectionShareToken(
+  id: string,
+): Promise<string | null> {
+  // `.eq` on a uuid column raises 42P02 on a malformed value, which would surface
+  // as a failure rather than as "no such collection". The id reaches here from a
+  // client component, so it is checked the same way the share token is.
+  if (!UUID_PATTERN.test(id)) return null;
+
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("collections")
+    .select("share_token")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Could not load the share link: ${error.message}`);
+  }
+
+  return data?.share_token ?? null;
 }
 
 /**
@@ -1075,38 +1236,99 @@ export async function addNoteImage(
   userId: string,
   file: File,
 ): Promise<void> {
-  const extension = imageExtension(file.type);
+  // Checked before anything is uploaded, and before `path` is built from it.
+  // `noteId` is a Server Action argument, so it is whatever the caller sent, and it
+  // is interpolated straight into the object key below. Without this the bytes land
+  // in Storage first and the row insert is what rejects them — leaving the upload
+  // to be undone by the cleanup further down, which is a worse place to depend on
+  // than never having written. Same `UUID_PATTERN` as `getSharedCollection` and
+  // `getCollectionShareToken`, though not for their reason: those guard a read and
+  // answer `null`, where this one guards a path and has to refuse.
+  if (!UUID_PATTERN.test(noteId)) {
+    throw new UserFacingError("That note does not exist.");
+  }
 
-  if (!extension) {
-    throw new Error("Images must be PNG, JPEG, WebP or GIF.");
+  // `UUID_PATTERN` carries the `i` flag, and Postgres renders a uuid in lowercase.
+  // So an uppercase id passed the check above, went verbatim into the object key,
+  // and was then refused by the storage policy, which compares that segment against
+  // `notes.id::text`. The two layers have to agree on one spelling and lowercase is
+  // the one the database produces, so it is normalised here rather than the policy
+  // being loosened to accept both. `userId` needs none of this: it comes from
+  // `requireUser()` and is already canonical.
+  const canonicalNoteId = noteId.toLowerCase();
+
+  // Empty first, because a zero-byte file has no header to read and "that file is
+  // empty" is the useful thing to say about it. It was already reachable through the
+  // app — a browser takes `File.type` from the extension, not the content, so an
+  // empty `foo.png` carried `image/png` and reached this check. What changes is the
+  // file with no extension, which used to be turned away as the wrong format.
+  if (file.size === 0) {
+    throw new UserFacingError("That file is empty.");
+  }
+
+  // Only the header, and only as many bytes as the signature table can need. That
+  // avoids a second copy rather than avoiding the buffering: Next has already parsed
+  // the whole multipart body before this action runs, which is what
+  // `serverActions.bodySizeLimit` in next.config.ts bounds. For the same reason
+  // reading twelve bytes before the size check below costs nothing.
+  //
+  // `file.type` is deliberately not consulted, here or below. It is the Content-Type
+  // the client attached to its own multipart part, so it is a claim: calling the
+  // Server Action directly could store any bytes at all as `image/png`, and the
+  // extension in the object key was derived from that same string. The bucket's
+  // `allowed_mime_types` was no help either, since it checks the declared type too.
+  // The format decides the extension in the key, the `mime_type` recorded on the
+  // row, and the type Storage serves the object as, so all three now describe the
+  // bytes rather than repeating the uploader's word for them.
+  const header = new Uint8Array(
+    await file.slice(0, SIGNATURE_BYTES).arrayBuffer(),
+  );
+  const format = detectImageFormat(header);
+
+  if (!format) {
+    throw new UserFacingError("Images must be PNG, JPEG, WebP or GIF.");
   }
 
   if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error("Images must be 5 MB or smaller.");
-  }
-
-  if (file.size === 0) {
-    throw new Error("That file is empty.");
+    throw new UserFacingError("Images must be 5 MB or smaller.");
   }
 
   const supabase = await createClient();
 
   // A fresh uuid rather than the uploaded filename: two photos called IMG_0001.jpg
   // must not collide, and a name from the client has no business becoming a path.
-  const path = `${userId}/${noteId}/${crypto.randomUUID()}.${extension}`;
+  const path = `${userId}/${canonicalNoteId}/${crypto.randomUUID()}.${format.extension}`;
+
+  // The body is re-wrapped so that its own `type` is the detected one, because the
+  // `contentType` option below cannot do that job alone: supabase-js applies it only
+  // when the body is *not* a Blob — see `uploadOrUpdate` in
+  // node_modules/@supabase/storage-js, which builds a FormData and appends the blob
+  // whenever `fileBody instanceof Blob`, and a `File` from FormData is one. So the
+  // multipart part, and therefore the Content-Type Storage stores and serves, comes
+  // from `File.type`. Leaving the client's value there would keep the served type
+  // uploader-controlled, would disagree with the `mime_type` recorded below, and
+  // would have the bucket's `allowed_mime_types` refuse a genuine image whose
+  // declared type was empty — an extensionless file picked through the "all files"
+  // escape hatch arrives with `type: ""`.
+  //
+  // The option is passed as well, not instead: it is the documented way to say this,
+  // and it starts working if the body ever stops being a Blob.
+  const body = new File([file], path.slice(path.lastIndexOf("/") + 1), {
+    type: format.mime,
+  });
 
   const { error: uploadError } = await supabase.storage
     .from(IMAGE_BUCKET)
-    .upload(path, file, { contentType: file.type, upsert: false });
+    .upload(path, body, { contentType: format.mime, upsert: false });
 
   if (uploadError) {
     throw new Error(`Could not upload image: ${uploadError.message}`);
   }
 
   const { error } = await supabase.from("note_images").insert({
-    note_id: noteId,
+    note_id: canonicalNoteId,
     storage_path: path,
-    mime_type: file.type,
+    mime_type: format.mime,
     size_bytes: file.size,
   });
 
@@ -1148,7 +1370,7 @@ export async function deleteNoteImage(id: string): Promise<void> {
   }
 
   if (!data) {
-    throw new Error("Could not delete image: it no longer exists.");
+    throw new UserFacingError("Could not delete image: it no longer exists.");
   }
 
   const path = (data as { storage_path: string }).storage_path;

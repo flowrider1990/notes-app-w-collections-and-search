@@ -199,6 +199,25 @@ begin
 end;
 $$;
 
+-- `create function` grants EXECUTE to PUBLIC, and Supabase's default ACL on schema `public`
+-- adds `anon` and `authenticated` by name on top of it. None of those three is written by
+-- this project and none is needed: PostgreSQL checks EXECUTE on a trigger function when the
+-- trigger is CREATED, not each time it fires, and `postgres` owns this one. Section 9 closes
+-- the template those grants are stamped from, but only for objects created after it runs -- on
+-- the live project this function was created long before, and ALTER DEFAULT PRIVILEGES never
+-- reaches back to an object that already exists, so its own grants are taken back here.
+--
+-- Nothing reaches it today (PostgREST does not publish a function returning `trigger`), so
+-- this is the last inherited grant in `public` rather than an open door. Revoking from PUBLIC
+-- is the statement that matters: `anon` holds EXECUTE by name *and* through PUBLIC, so the
+-- named revokes alone would leave it reachable.
+--
+-- Applied by supabase/migrations/20260820163152_revoke_set_updated_at_execute.sql.
+
+revoke execute on function public.set_updated_at() from anon;
+revoke execute on function public.set_updated_at() from authenticated;
+revoke execute on function public.set_updated_at() from public;
+
 drop trigger if exists notes_set_updated_at on public.notes;
 create trigger notes_set_updated_at
   before update on public.notes
@@ -548,10 +567,12 @@ grant execute on function public.shared_collection(uuid) to anon, authenticated;
 -- section 6 leaves it — one token-gated function, and nothing else. Shared
 -- collections deliberately show title and body only, never images.
 --
--- Object layout is `{user_id}/{note_id}/{uuid}.{ext}`. The storage policies match on
--- that first segment, so a user can only reach their own prefix. The uuid filename
--- is deliberate: an uploaded filename from a client has no business becoming a path,
--- and two photos called IMG_0001.jpg must not collide.
+-- Object layout is `{user_id}/{note_id}/{uuid}.{ext}`. SELECT and DELETE match on the
+-- first segment, so a user can only reach their own prefix; INSERT additionally
+-- requires the depth and a note-id segment naming a note the caller owns, since it
+-- is the only one of the three that can bring an object into existence. The uuid
+-- filename is deliberate: an uploaded filename from a client has no business
+-- becoming a path, and two photos called IMG_0001.jpg must not collide.
 --
 -- Added by supabase/migrations/20260817145538_add_note_images.sql.
 
@@ -571,13 +592,72 @@ set public = excluded.public,
 -- INSERT, SELECT and DELETE only. Nothing overwrites an object — each upload gets a
 -- fresh uuid name — so there is no upsert, and upsert is the one operation that
 -- would also need UPDATE.
+--
+-- INSERT is the strict one, because it is the only one that can create an object.
+-- Beyond the bucket and the owner's prefix it pins the depth of the documented
+-- `{user_id}/{note_id}/{file}` layout and requires the note-id segment to name a
+-- note the caller owns — otherwise a session plus the publishable key could write
+-- objects under any folder name it liked inside its own prefix. `n.id::text =
+-- segment` rather than `segment::uuid`, because the segment is attacker-controlled
+-- text and casting it raises 22P02 instead of returning false; a regex guard would
+-- not help, as `AND` is not evaluated left to right. SELECT and DELETE still match
+-- on the first segment alone: that is what makes them the caller's own, and neither
+-- can bring an object into existence.
+-- Tightened by supabase/migrations/20260820181531_bind_note_image_uploads_to_owned_note.sql.
+--
+-- The filename is pinned too: a lowercase uuid from `crypto.randomUUID()` and one of
+-- the four extensions the app can detect. **That couples this policy to the
+-- signature table in lib/db/image-signature.ts, and nothing but this note links
+-- them** — the same trap `TAG_COLORS` and `tags_color_check` carry. The list here is
+-- extensions, not MIME types, so `image/jpeg` appears as `jpg` and `jpeg` is absent;
+-- adding a format to that table without adding its extension here makes uploads of
+-- that format fail at Storage, which a user only sees as "Could not attach the
+-- image." The bucket's `allowed_mime_types` above is the third copy of the same
+-- fact, so a new format means editing all three.
+--
+-- The extension now describes the file's own header rather than the Content-Type its
+-- uploader claimed: `addNoteImage` reads the leading bytes, matches them against that
+-- table, and takes the extension, the recorded `mime_type` and the type Storage
+-- serves the object as from what it found. Before that, an attacker calling the
+-- Server Action directly could store arbitrary bytes as `image/png` — the bucket's
+-- `allowed_mime_types` was no defence, because it checks the declared type too.
+-- Pinning the filename also closed the one gap 181531 left open, where a trailing
+-- slash and no filename still split into two folders and was accepted.
+-- Added by supabase/migrations/20260820184328_constrain_note_image_object_filename.sql.
+--
+-- All of this enforces the *shape* of a key, and none of it is a quota. A caller can
+-- still mint unlimited fresh uuids under a note they own — every one matching the
+-- pattern, none carrying a `note_images` row — and create unlimited notes to hold
+-- them. `deleteNote` will not remove those, because it enumerates `note_images` rows
+-- to decide what to delete. **Orphan accumulation is still open, by decision rather
+-- than oversight.**
+--
+-- What would close it is requiring a matching `note_images` row, and that cannot be
+-- written as a conjunct here, because `addNoteImage` uploads the bytes before it
+-- writes the row: at INSERT time there is nothing to match. Nor can the two writes
+-- share a transaction — the upload is an HTTP call to storage-api, which commits on
+-- its own connection before the PostgREST insert begins — which is why deferred
+-- constraints and a foreign key onto `note_images` are out too. The options that do
+-- exist, and why none was taken here, are recorded in the migration named below;
+-- the short version is that one changes the upload architecture, one pins this
+-- schema to storage-api internals, and one is a storage quota that wants a number
+-- chosen on purpose.
 
 drop policy if exists note_images_storage_insert on storage.objects;
 create policy note_images_storage_insert on storage.objects
   for insert to authenticated
   with check (
     bucket_id = 'note-images'
+    and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = (select auth.uid())::text
+    and exists (
+      select 1
+        from public.notes n
+       where n.id::text = (storage.foldername(name))[2]
+         and n.user_id = (select auth.uid())
+    )
+    and storage.filename(name) ~
+      '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.](png|jpg|webp|gif)$'
   );
 
 drop policy if exists note_images_storage_select on storage.objects;
@@ -619,9 +699,20 @@ create index if not exists note_images_user_id_idx on public.note_images (user_i
 alter table public.note_images enable row level security;
 
 -- INSERT checks the parent note as well as the owner, so a row cannot be attached to
--- someone else's note by passing its id. No UPDATE policy: an attachment row is only
--- ever created and deleted, and a policy for an operation nothing performs would only
--- widen the surface.
+-- someone else's note by passing its id, and it pins the first segment of
+-- `storage_path` to the caller's uid so a row cannot point at another user's prefix
+-- either. That third conjunct reuses `storage.foldername` from the storage.objects
+-- policies earlier in this section rather than re-deriving the segment, so the table
+-- and the bucket cannot disagree about where a file is allowed to live.
+-- Added by supabase/migrations/20260820171403_constrain_note_image_storage_path.sql.
+--
+-- No UPDATE policy: an attachment row is only ever created and deleted, and a policy
+-- for an operation nothing performs would only widen the surface. That is also what
+-- makes constraining INSERT enough — a storage_path cannot be rewritten later. It is
+-- a standing condition rather than a fact, though: `authenticated` still holds the
+-- UPDATE grant on this table (section 8 revoked only TRUNCATE), so adding an UPDATE
+-- policy here without carrying the storage_path conjunct into its WITH CHECK would
+-- reopen the hole — insert a conforming row, then patch the path to a foreign prefix.
 
 drop policy if exists note_images_select on public.note_images;
 create policy note_images_select on public.note_images
@@ -636,6 +727,7 @@ create policy note_images_insert on public.note_images
       select 1 from public.notes n
       where n.id = note_id and n.user_id = (select auth.uid())
     )
+    and (storage.foldername(storage_path))[1] = (select auth.uid())::text
   );
 
 drop policy if exists note_images_delete on public.note_images;
@@ -643,7 +735,119 @@ create policy note_images_delete on public.note_images
   for delete to authenticated using (user_id = (select auth.uid()));
 
 -- ============================================================
--- 8. Verification
+-- 8. Table privileges
+-- ============================================================
+-- Supabase's stock grant hands every table in `public` to `anon` with the same full
+-- privilege set as `authenticated`. Nothing leaks through it — `anon` holds no policy on
+-- any of these tables and RLS is on for all six, so every row is denied — with one
+-- exception: TRUNCATE is not filtered by RLS, because policies are evaluated per row and
+-- TRUNCATE removes rows without visiting them. For that one command the grant is the only
+-- control, so it is revoked rather than relied upon.
+--
+-- The same reasoning reaches `authenticated`, so TRUNCATE is revoked there too. That role is
+-- what every signed-in browser session assumes, and RLS does not constrain the one command it
+-- does not filter: `truncate public.notes` would take every user's notes, not the caller's rows.
+-- Nothing in the app can issue one -- PostgREST has no TRUNCATE verb -- and revoking it means
+-- the six tables no longer depend on that staying true. `authenticated` keeps SELECT, INSERT,
+-- UPDATE and DELETE, which are how the app works and are all filtered by section 4's policies.
+--
+-- No policy changes in this section, and `service_role` and `postgres` keep everything.
+--
+-- Share links are unaffected. `public.shared_collection(uuid)` in section 6 is
+-- `security definer` owned by `postgres`, so it reads `notes` and `collections` with the
+-- owner's rights. An anonymous visitor needs `usage` on schema `public` and `execute` on
+-- that function; neither is a table grant and neither is revoked here.
+--
+-- Applied by supabase/migrations/20260820152052_revoke_anon_table_grants.sql (anon) and
+-- supabase/migrations/20260820164046_revoke_authenticated_truncate.sql (authenticated).
+--
+-- This covers the tables that exist. The template new tables are stamped from is a separate
+-- thing, and section 9 closes both halves of it — a table added after that arrives with nothing
+-- for `anon` and without TRUNCATE for `authenticated`. Neither list below needs a line adding by
+-- hand when a seventh table appears.
+
+revoke all privileges on table public.collections    from anon;
+revoke all privileges on table public.note_images    from anon;
+revoke all privileges on table public.note_tags      from anon;
+revoke all privileges on table public.notes          from anon;
+revoke all privileges on table public.search_history from anon;
+revoke all privileges on table public.tags           from anon;
+
+revoke truncate on table public.collections    from authenticated;
+revoke truncate on table public.note_images    from authenticated;
+revoke truncate on table public.note_tags      from authenticated;
+revoke truncate on table public.notes          from authenticated;
+revoke truncate on table public.search_history from authenticated;
+revoke truncate on table public.tags           from authenticated;
+
+-- ============================================================
+-- 9. Default privileges
+-- ============================================================
+-- Sections 6 and 8 fix the privileges on objects that exist. This one fixes the template
+-- every future object in `public` is stamped from, which is a different thing and was the
+-- gap behind both of them.
+--
+-- Supabase ships schema `public` with default ACLs that hand the full set to `anon` and to
+-- `authenticated`, from two granting roles (`postgres` and `supabase_admin`):
+--
+--     objtype 'f' (functions): {postgres=X,        anon=X,        authenticated=X,        service_role=X}
+--     objtype 'r' (tables):    {postgres=arwdDxtm, anon=arwdDxtm, authenticated=arwdDxtm, service_role=arwdDxtm}
+--
+-- The functions half is the sharp edge. `create function` in `public` produces an endpoint at
+-- /rest/v1/rpc/<name> that `anon` can call, with no `grant` written anywhere — and a
+-- `security definer` function runs as its owner with RLS bypassed. That is the exact shape
+-- this project asks contributors to write (see `shared_collection` in section 6), so the
+-- default works against the convention. Section 4's `rls_auto_enable` revoke at the top of
+-- this file exists only because of it.
+--
+-- After this, a new function is callable only once someone writes an explicit `grant execute`,
+-- and a new table arrives with nothing for `anon`. `authenticated` keeps its table defaults
+-- except TRUNCATE: every table here is meant to be reachable by a signed-in user and gated by
+-- RLS, which is true of SELECT, INSERT, UPDATE and DELETE and is exactly what is not true of
+-- TRUNCATE — policies are evaluated per row and TRUNCATE never visits one, so section 8's
+-- argument applies to the template as well as to the six tables it already fixed. Without this
+-- the seventh table would arrive with TRUNCATE restored. `service_role` keeps everything — it is
+-- the trusted server-side key and never reaches a browser.
+--
+-- ALTER DEFAULT PRIVILEGES is prospective only. No existing ACL changes, so
+-- `shared_collection` stays executable by `anon`, `rls_auto_enable` stays not, and the six
+-- tables keep the grants section 8 left them with. No RLS policy and nothing in `storage` is
+-- touched. Sequences are left alone throughout: their defaults carry no TRUNCATE to revoke, so
+-- they are out of scope here — not assessed and cleared. That row still reads
+-- `{postgres=rwU, anon=rwU, authenticated=rwU, service_role=rwU}`.
+--
+-- A default ACL is keyed to the role that CREATES the object, and the two granting roles are
+-- therefore not equally important here.
+--
+-- `postgres` is the row that governs everything this project makes, since migrations connect
+-- as `postgres`. Those two statements are mandatory: unguarded, no exception handler, and any
+-- failure aborts the migration. A silent skip would leave the hole open while the migration
+-- history claimed otherwise.
+--
+-- `supabase_admin` governs extensions and Supabase-managed objects, and nothing in this
+-- repository. Altering its defaults needs ADMIN OPTION on that role since PostgreSQL 16 (this
+-- project is on 17.6), which `postgres` does not hold on a hosted project and cannot grant
+-- itself. That pass is therefore pre-checked and, when not permitted, skipped with a WARNING
+-- naming what was and was not done. The attempt is still wrapped, but the handler catches
+-- `insufficient_privilege` and nothing else — a syntax error or any other failure propagates
+-- and aborts, the same as the `postgres` half.
+--
+-- Applied by supabase/migrations/20260820154942_close_public_default_privileges.sql, and the
+-- TRUNCATE line by supabase/migrations/20260820164907_revoke_authenticated_truncate_default.sql.
+-- The effective statements — the `postgres` ones unconditional, the `supabase_admin` ones
+-- conditional. They are commented out because this section cannot be applied by running this
+-- file: the `supabase_admin` pair needs the guarded block those migrations carry, and a run that
+-- silently skipped it would be worse than no run. Apply section 9 with `supabase db push`, not by
+-- pasting this file into the SQL editor.
+
+-- alter default privileges for role postgres       in schema public revoke execute  on functions from anon, authenticated;
+-- alter default privileges for role postgres       in schema public revoke all      on tables    from anon;
+-- alter default privileges for role postgres       in schema public revoke truncate on tables    from authenticated;
+-- alter default privileges for role supabase_admin in schema public revoke execute  on functions from anon, authenticated;
+-- alter default privileges for role supabase_admin in schema public revoke all      on tables    from anon;
+
+-- ============================================================
+-- 10. Verification
 -- ============================================================
 -- Run these after the above. Expect six rows from the first, and policy rows for all
 -- six tables from the second.
@@ -671,3 +875,132 @@ create policy note_images_delete on public.note_images
 -- select p.proname, p.prosecdef, r.rolname, has_function_privilege(r.rolname, p.oid, 'execute')
 --   from pg_proc p, (select 'anon' as rolname union select 'authenticated') r
 --   where p.proname = 'shared_collection';
+
+-- After section 8, anon must hold no table privileges at all: expect zero rows here.
+-- select table_name, privilege_type from information_schema.role_table_grants
+--   where table_schema = 'public' and grantee = 'anon';
+
+-- authenticated keeps the four commands the app runs, and must hold no TRUNCATE. Expect six
+-- rows, each reading exactly DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE, and has_truncate
+-- false on every one.
+-- select table_name,
+--        string_agg(privilege_type, ',' order by privilege_type) as privs,
+--        bool_or(privilege_type = 'TRUNCATE') as has_truncate
+--   from information_schema.role_table_grants
+--  where table_schema = 'public' and grantee = 'authenticated'
+--  group by table_name order by table_name;
+
+-- The two grants share links actually depend on, neither of them a table grant.
+-- Expect U for the schema and X for the function.
+-- select has_schema_privilege('anon', 'public', 'usage')      as schema_usage,
+--        has_function_privilege('anon', 'public.shared_collection(uuid)', 'execute') as fn_execute;
+
+-- Section 9. The `postgres` rows must show no `anon=` entry at all, no `authenticated=X` on
+-- the function row, and `authenticated=arwdxtm` — no `D` — on the table row. A `supabase_admin`
+-- row still carrying them is the documented skip, not a regression — application objects are
+-- not created by that role.
+-- select pg_get_userbyid(d.defaclrole) as granting_role,
+--        case d.defaclobjtype when 'r' then 'table' when 'f' then 'function'
+--             else d.defaclobjtype::text end as objtype,
+--        d.defaclacl::text as acl
+--   from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
+--  where n.nspname = 'public' and d.defaclobjtype in ('r','f')
+--  order by 1, 2;
+
+-- The prospective-only guarantee, checked against the objects that already exist.
+-- Expect shared_collection true/true; rls_auto_enable and set_updated_at false/false. Only
+-- the share function is meant to be callable, and only it should ever read true here.
+-- select p.proname,
+--        has_function_privilege('anon',          p.oid, 'execute') as anon_exec,
+--        has_function_privilege('authenticated', p.oid, 'execute') as auth_exec
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--  where n.nspname = 'public'
+--    and p.proname in ('shared_collection', 'rls_auto_enable', 'set_updated_at');
+
+-- Section 3's revoke leaves the trigger alone. Expect one row, tgenabled = 'O'.
+-- select t.tgname, c.relname, t.tgenabled from pg_trigger t
+--   join pg_class c on c.oid = t.tgrelid
+--  where not t.tgisinternal and t.tgfoid = 'public.set_updated_at()'::regprocedure;
+
+-- Section 7's storage_path conjunct, read straight out of the catalogue rather than
+-- inferred from the migration. Expect one row whose with_check names all three
+-- checks: user_id, the exists(...) on notes, and foldername(storage_path). This is
+-- the query the migration's own DO block cannot be — it reads the live policy
+-- without dropping it first, so it is what catches a policy edited by hand in the
+-- dashboard. Run it after 20260820171403.
+-- select pol.polname,
+--        pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check
+--   from pg_policy pol
+--  where pol.polrelid = 'public.note_images'::regclass
+--    and pol.polname = 'note_images_insert';
+
+-- That conjunct calls into the storage schema, so it only holds if authenticated can
+-- still reach the function. Expect true/true — false on either means every note
+-- image insert is refused, not just cross-user ones.
+-- select has_schema_privilege('authenticated', 'storage', 'usage')  as schema_usage,
+--        has_function_privilege('authenticated', 'storage.foldername(text)', 'execute')
+--          as fn_execute;
+
+-- note_images must have no UPDATE policy: the storage_path conjunct above is on
+-- INSERT only, so an UPDATE policy without the same check would let a conforming row
+-- be patched to a foreign prefix. Expect zero rows.
+-- select policyname, cmd from pg_policies
+--  where schemaname = 'public' and tablename = 'note_images' and cmd = 'UPDATE';
+
+-- Section 7's upload binding, read out of the catalogue rather than inferred from
+-- the migration. Expect one row whose with_check names all six checks: the bucket,
+-- array_length, foldername[1], public.notes, user_id, and filename. Reads without
+-- dropping first, which is what the migration's own DO block cannot do. Run after
+-- 20260820184328.
+-- select pol.polname,
+--        pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check
+--   from pg_policy pol
+--  where pol.polrelid = 'storage.objects'::regclass
+--    and pol.polname = 'note_images_storage_insert';
+
+-- That policy reads public.notes as the invoking role, so it only holds while
+-- authenticated may reach it — both the schema and the table. Expect true/true;
+-- false on either means every upload is refused, not just the unbound ones.
+-- select has_schema_privilege('authenticated', 'public', 'usage') as schema_usage,
+--        has_table_privilege('authenticated', 'public.notes', 'select') as can_read_notes;
+
+-- Every object already in the bucket should satisfy the tightened policy: depth 2,
+-- first segment an owner, second segment one of that owner's notes. Expect zero rows.
+-- select o.name from storage.objects o
+--  where o.bucket_id = 'note-images'
+--    and not (
+--          array_length(storage.foldername(o.name), 1) = 2
+--      and exists (
+--            select 1 from public.notes n
+--             where n.id::text = (storage.foldername(o.name))[2]
+--               and n.user_id::text = (storage.foldername(o.name))[1]
+--          )
+--        );
+
+-- What the section 7 policies deliberately do not prevent, so it can at least be
+-- measured: objects in the bucket with no `note_images` row. Expect zero on a
+-- healthy project. A non-zero count is either an upload whose row insert failed and
+-- whose cleanup also failed, or a caller writing straight to the Storage API — the
+-- open half of the orphan concern, not a policy regression.
+-- select count(*) as orphaned_objects
+--   from storage.objects o
+--  where o.bucket_id = 'note-images'
+--    and not exists (
+--          select 1 from public.note_images ni where ni.storage_path = o.name
+--        );
+
+-- The converse: rows pointing at objects that are not there. Expect zero. These are
+-- visible in the app as an attachment that will not load, and can be removed through
+-- it — which is worth stating precisely, because the asymmetry runs the opposite way
+-- to the one that governs deletion. On delete, orphaned *objects* are the lesser
+-- evil, because the alternative is destroying bytes that cannot be recovered. On
+-- upload nothing is lost by not having uploaded, so the recoverable failure is the
+-- row without an object, and it is the current bytes-then-row order that fails into
+-- the unrecoverable one. That is an argument for the reservation order, not against
+-- it; the reason it has not been adopted is scope, not merit.
+-- select count(*) as rows_without_objects
+--   from public.note_images ni
+--  where not exists (
+--          select 1 from storage.objects o
+--           where o.bucket_id = 'note-images' and o.name = ni.storage_path
+--        );

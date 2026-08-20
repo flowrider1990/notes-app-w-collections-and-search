@@ -11,12 +11,12 @@ import { NoteCard } from "@/components/notes/note-card";
 import { ShareCollection } from "@/components/notes/share-collection";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { Note } from "@/lib/db";
+import type { NoteListItem } from "@/lib/db";
 import { NOTE_COLLECTION_MIME, NOTE_ID_MIME } from "@/lib/dnd";
 
 type CollectionGroupProps = {
   name: string;
-  notes: Note[];
+  notes: NoteListItem[];
   /**
    * How many notes the collection contains, independent of the active filter.
    * The badge reports the collection; the body lists what survived filtering.
@@ -30,11 +30,12 @@ type CollectionGroupProps = {
    */
   collectionId?: string;
   /**
-   * The collection's share token, or null when private. Only meaningful alongside
+   * Whether this collection has a share link. Only meaningful alongside
    * `collectionId` — the Uncollected and Archive sections are views, not rows, and
-   * cannot be shared.
+   * cannot be shared. The token itself is not passed down; `ShareCollection` reads
+   * it when its menu opens.
    */
-  shareToken?: string | null;
+  isShared?: boolean;
   /**
    * Whether a dragged note can be dropped here to join this collection. The
    * "Archive" section reuses this component and must set it false: it has no
@@ -75,7 +76,7 @@ export function CollectionGroup({
   totalCount,
   emptyMessage,
   collectionId,
-  shareToken = null,
+  isShared = false,
   droppable = true,
   defaultExpanded = false,
   forceExpanded = false,
@@ -282,7 +283,7 @@ export function CollectionGroup({
             <ShareCollection
               collectionId={collectionId}
               name={name}
-              shareToken={shareToken}
+              isShared={isShared}
             />
           </>
         ) : null}
