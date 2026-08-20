@@ -199,6 +199,25 @@ begin
 end;
 $$;
 
+-- `create function` grants EXECUTE to PUBLIC, and Supabase's default ACL on schema `public`
+-- adds `anon` and `authenticated` by name on top of it. None of those three is written by
+-- this project and none is needed: PostgreSQL checks EXECUTE on a trigger function when the
+-- trigger is CREATED, not each time it fires, and `postgres` owns this one. Section 9 closes
+-- the template those grants are stamped from, but only for objects created after it runs -- on
+-- the live project this function was created long before, and ALTER DEFAULT PRIVILEGES never
+-- reaches back to an object that already exists, so its own grants are taken back here.
+--
+-- Nothing reaches it today (PostgREST does not publish a function returning `trigger`), so
+-- this is the last inherited grant in `public` rather than an open door. Revoking from PUBLIC
+-- is the statement that matters: `anon` holds EXECUTE by name *and* through PUBLIC, so the
+-- named revokes alone would leave it reachable.
+--
+-- Applied by supabase/migrations/20260820163152_revoke_set_updated_at_execute.sql.
+
+revoke execute on function public.set_updated_at() from anon;
+revoke execute on function public.set_updated_at() from authenticated;
+revoke execute on function public.set_updated_at() from public;
+
 drop trigger if exists notes_set_updated_at on public.notes;
 create trigger notes_set_updated_at
   before update on public.notes
@@ -777,9 +796,16 @@ revoke all privileges on table public.tags           from anon;
 --  order by 1, 2;
 
 -- The prospective-only guarantee, checked against the objects that already exist.
--- Expect shared_collection true/true and rls_auto_enable false/false, unchanged by section 9.
+-- Expect shared_collection true/true; rls_auto_enable and set_updated_at false/false. Only
+-- the share function is meant to be callable, and only it should ever read true here.
 -- select p.proname,
 --        has_function_privilege('anon',          p.oid, 'execute') as anon_exec,
 --        has_function_privilege('authenticated', p.oid, 'execute') as auth_exec
 --   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
---  where n.nspname = 'public' and p.proname in ('shared_collection', 'rls_auto_enable');
+--  where n.nspname = 'public'
+--    and p.proname in ('shared_collection', 'rls_auto_enable', 'set_updated_at');
+
+-- Section 3's revoke leaves the trigger alone. Expect one row, tgenabled = 'O'.
+-- select t.tgname, c.relname, t.tgenabled from pg_trigger t
+--   join pg_class c on c.oid = t.tgrelid
+--  where not t.tgisinternal and t.tgfoid = 'public.set_updated_at()'::regprocedure;
