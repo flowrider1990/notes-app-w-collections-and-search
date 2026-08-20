@@ -31,6 +31,28 @@ const nextConfig: NextConfig = {
     ],
   },
 
+  /**
+   * Response headers that apply to every route. The `*` modifier makes the parameter
+   * zero-or-more, so `/:path*` matches the top-level `/` as well as everything under
+   * it — the built regex in `.next/routes-manifest.json` is the place to confirm that
+   * if this pattern is ever changed.
+   */
+  headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          // Without this a browser may sniff a response into a type the server never
+          // declared. It covers what this origin serves, which for a user-uploaded
+          // attachment means the `/_next/image` response rather than the signed
+          // Storage URL behind it — rendering one with `unoptimized` or a plain `<img>`
+          // would take it back out of scope. `nosniff` is the only valid value.
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
+  },
+
   experimental: {
     serverActions: {
       // The bucket caps a file at 5 MiB; this is the whole multipart request, so it
