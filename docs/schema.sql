@@ -567,10 +567,12 @@ grant execute on function public.shared_collection(uuid) to anon, authenticated;
 -- section 6 leaves it — one token-gated function, and nothing else. Shared
 -- collections deliberately show title and body only, never images.
 --
--- Object layout is `{user_id}/{note_id}/{uuid}.{ext}`. The storage policies match on
--- that first segment, so a user can only reach their own prefix. The uuid filename
--- is deliberate: an uploaded filename from a client has no business becoming a path,
--- and two photos called IMG_0001.jpg must not collide.
+-- Object layout is `{user_id}/{note_id}/{uuid}.{ext}`. SELECT and DELETE match on the
+-- first segment, so a user can only reach their own prefix; INSERT additionally
+-- requires the depth and a note-id segment naming a note the caller owns, since it
+-- is the only one of the three that can bring an object into existence. The uuid
+-- filename is deliberate: an uploaded filename from a client has no business
+-- becoming a path, and two photos called IMG_0001.jpg must not collide.
 --
 -- Added by supabase/migrations/20260817145538_add_note_images.sql.
 
@@ -590,13 +592,38 @@ set public = excluded.public,
 -- INSERT, SELECT and DELETE only. Nothing overwrites an object — each upload gets a
 -- fresh uuid name — so there is no upsert, and upsert is the one operation that
 -- would also need UPDATE.
+--
+-- INSERT is the strict one, because it is the only one that can create an object.
+-- Beyond the bucket and the owner's prefix it pins the depth of the documented
+-- `{user_id}/{note_id}/{file}` layout and requires the note-id segment to name a
+-- note the caller owns — otherwise a session plus the publishable key could write
+-- objects under any folder name it liked inside its own prefix. `n.id::text =
+-- segment` rather than `segment::uuid`, because the segment is attacker-controlled
+-- text and casting it raises 22P02 instead of returning false; a regex guard would
+-- not help, as `AND` is not evaluated left to right. SELECT and DELETE still match
+-- on the first segment alone: that is what makes them the caller's own, and neither
+-- can bring an object into existence.
+--
+-- This enforces the shape and nothing more. The filename is unconstrained, so a
+-- caller can still write unlimited unreferenced objects under a note id they own,
+-- and `deleteNote` will not remove them because it enumerates `note_images` rows to
+-- decide what to delete. Orphan accumulation is a separate, open concern; a depth
+-- check is not a quota.
+-- Tightened by supabase/migrations/20260820181531_bind_note_image_uploads_to_owned_note.sql.
 
 drop policy if exists note_images_storage_insert on storage.objects;
 create policy note_images_storage_insert on storage.objects
   for insert to authenticated
   with check (
     bucket_id = 'note-images'
+    and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = (select auth.uid())::text
+    and exists (
+      select 1
+        from public.notes n
+       where n.id::text = (storage.foldername(name))[2]
+         and n.user_id = (select auth.uid())
+    )
   );
 
 drop policy if exists note_images_storage_select on storage.objects;
@@ -885,3 +912,33 @@ revoke truncate on table public.tags           from authenticated;
 -- be patched to a foreign prefix. Expect zero rows.
 -- select policyname, cmd from pg_policies
 --  where schemaname = 'public' and tablename = 'note_images' and cmd = 'UPDATE';
+
+-- Section 7's upload binding, read out of the catalogue rather than inferred from
+-- the migration. Expect one row whose with_check names all five checks: the bucket,
+-- array_length, foldername[1], public.notes, and user_id. Reads without dropping
+-- first, which is what the migration's own DO block cannot do. Run after
+-- 20260820181531.
+-- select pol.polname,
+--        pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check
+--   from pg_policy pol
+--  where pol.polrelid = 'storage.objects'::regclass
+--    and pol.polname = 'note_images_storage_insert';
+
+-- That policy reads public.notes as the invoking role, so it only holds while
+-- authenticated may reach it — both the schema and the table. Expect true/true;
+-- false on either means every upload is refused, not just the unbound ones.
+-- select has_schema_privilege('authenticated', 'public', 'usage') as schema_usage,
+--        has_table_privilege('authenticated', 'public.notes', 'select') as can_read_notes;
+
+-- Every object already in the bucket should satisfy the tightened policy: depth 2,
+-- first segment an owner, second segment one of that owner's notes. Expect zero rows.
+-- select o.name from storage.objects o
+--  where o.bucket_id = 'note-images'
+--    and not (
+--          array_length(storage.foldername(o.name), 1) = 2
+--      and exists (
+--            select 1 from public.notes n
+--             where n.id::text = (storage.foldername(o.name))[2]
+--               and n.user_id::text = (storage.foldername(o.name))[1]
+--          )
+--        );
