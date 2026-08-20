@@ -10,11 +10,30 @@ import {
 } from "@/app/notes/actions";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
-import type { SignedNoteImage } from "@/lib/db";
+
+/**
+ * What a thumbnail needs: something to key and delete by, and something to render.
+ *
+ * Not `SignedNoteImage`, which is the database row plus a URL. That row's
+ * `storage_path` opens with the owner's auth uid — `{user_id}/{note_id}/{uuid}.{ext}`
+ * — so typing this prop as the row put a user id in the payload of every note view,
+ * alongside three more columns nothing here reads. The signed `url` is the only
+ * handle on a file this component has any use for, and it expires.
+ *
+ * `storage_path?: never` states the exclusion rather than merely omitting it: a
+ * narrower prop type accepts a wider object, so leaving the field out would not
+ * have stopped the row being passed again. Naming the field is also the guard's
+ * limit — it refuses this column, not extra fields in general.
+ */
+type NoteImageThumbnail = {
+  id: string;
+  url: string;
+  storage_path?: never;
+};
 
 type NoteImagesProps = {
   noteId: string;
-  images: SignedNoteImage[];
+  images: NoteImageThumbnail[];
 };
 
 /** Mirrors the bucket's `allowed_mime_types`, so the picker offers only what will be accepted. */

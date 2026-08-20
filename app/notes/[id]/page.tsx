@@ -66,15 +66,25 @@ async function NoteDetail({ params }: NotePageProps) {
       >
         <hr />
 
+        {/* Rows projected to the fields each control renders: everything reaching
+            a client component is serialized into this page's payload whether or not
+            anything draws it. `CollectionOption` and `NoteImageThumbnail` say which
+            fields, and why each excludes the one it does. */}
         <CollectionPicker
           noteId={note.id}
-          collections={collections}
+          collections={collections.map((collection) => ({
+            id: collection.id,
+            name: collection.name,
+          }))}
           currentCollectionId={note.collection_id}
         />
 
         <TagEditor noteId={note.id} tags={note.tags} />
 
-        <NoteImages noteId={note.id} images={images} />
+        <NoteImages
+          noteId={note.id}
+          images={images.map((image) => ({ id: image.id, url: image.url }))}
+        />
       </NoteEditor>
 
       <hr />
