@@ -162,9 +162,14 @@ const NOTE_COLUMNS =
 const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 
 /**
- * Guards the queries whose uuid argument does not come from a row we just read:
- * the share token out of a URL, and the collection id a client component asks
- * about. `.eq` on a uuid column raises 42P02 on anything malformed.
+ * Guards the uuid arguments that do not come from a row we just read: the share
+ * token out of a URL, the collection id a client component asks about, and the
+ * note id `addNoteImage` interpolates into a Storage object key.
+ *
+ * Two different reasons, so both are worth stating. For the queries, `.eq` on a
+ * uuid column raises 42P02 on anything malformed. For the object key there is no
+ * column to complain — the value becomes part of a path, and the check is what
+ * keeps an unvalidated one from being written and then swept up again.
  */
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1244,6 +1249,18 @@ export async function addNoteImage(
   userId: string,
   file: File,
 ): Promise<void> {
+  // Checked before anything is uploaded, and before `path` is built from it.
+  // `noteId` is a Server Action argument, so it is whatever the caller sent, and it
+  // is interpolated straight into the object key below. Without this the bytes land
+  // in Storage first and the row insert is what rejects them — leaving the upload
+  // to be undone by the cleanup further down, which is a worse place to depend on
+  // than never having written. Same `UUID_PATTERN` as `getSharedCollection` and
+  // `getCollectionShareToken`, though not for their reason: those guard a read and
+  // answer `null`, where this one guards a path and has to refuse.
+  if (!UUID_PATTERN.test(noteId)) {
+    throw new UserFacingError("That note does not exist.");
+  }
+
   const extension = imageExtension(file.type);
 
   if (!extension) {
