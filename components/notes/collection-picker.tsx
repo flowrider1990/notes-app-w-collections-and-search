@@ -31,11 +31,17 @@ import {
  * its own a refusal of the rest; naming the field that must be absent makes handing
  * over a whole row a compile error. The guard is per-field and by name, so it holds
  * this one door rather than every door.
+ *
+ * `is_shared` is named too, and not because a boolean is sensitive: `Collection` no
+ * longer carries `share_token` at all, so naming only that field would let a whole
+ * row through here again without a compile error. The guard has to name what the
+ * row actually has.
  */
 type CollectionOption = {
   id: string;
   name: string;
   share_token?: never;
+  is_shared?: never;
 };
 
 type CollectionPickerProps = {

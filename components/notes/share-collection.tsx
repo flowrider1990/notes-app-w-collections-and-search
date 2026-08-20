@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Check, Copy, Share2, Unlink } from "lucide-react";
 
 import {
+  getCollectionShareTokenAction,
   shareCollectionAction,
   unshareCollectionAction,
 } from "@/app/notes/actions";
@@ -19,8 +20,12 @@ import { cn } from "@/lib/utils";
 type ShareCollectionProps = {
   collectionId: string;
   name: string;
-  /** Null when the collection is private. */
-  shareToken: string | null;
+  /**
+   * Whether a share link exists — not the token, which would otherwise be
+   * serialised into every `/notes` response for every collection. The token is
+   * fetched when the menu opens; see the `Collection` type in lib/db.
+   */
+  isShared: boolean;
 };
 
 /**
@@ -36,11 +41,24 @@ type ShareCollectionProps = {
 export function ShareCollection({
   collectionId,
   name,
-  shareToken,
+  isShared,
 }: ShareCollectionProps) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  /**
+   * The token, once it has been asked for. Held here rather than in props because
+   * the list this component is rendered from deliberately does not carry it.
+   *
+   * Re-read every time the menu opens rather than cached after the first: sharing
+   * again issues a fresh token and revokes the old one, so a token kept from an
+   * earlier open could offer a link that has already stopped working. This is not
+   * held in `useTransition`'s `pending`, which gates the trigger button — a
+   * disabled trigger while its own menu is open fights the menu.
+   */
+  const [token, setToken] = useState<string | null>(null);
+  const [loadingToken, setLoadingToken] = useState(false);
 
   /**
    * `window` does not exist while this renders on the server, so the origin is
@@ -50,13 +68,53 @@ export function ShareCollection({
   const [origin, setOrigin] = useState("");
   useEffect(() => setOrigin(window.location.origin), []);
 
-  const url = shareToken && origin ? `${origin}/share/${shareToken}` : null;
+  const url = token && origin ? `${origin}/share/${token}` : null;
+
+  /**
+   * Fetches the token when the menu opens on a shared collection. A collection that
+   * is not shared has nothing to fetch, and any token still in state belongs to a
+   * link that was revoked, so it is dropped.
+   */
+  function onOpenChange(open: boolean) {
+    if (!open) return;
+
+    setError(null);
+
+    if (!isShared) {
+      setToken(null);
+      return;
+    }
+
+    // Dropped *before* the refetch rather than when it resolves. A token held from
+    // an earlier open may have been rotated or revoked since, and leaving it on
+    // screen — copyable, because `url` is still set — for the length of the round
+    // trip is the dead link this refetch exists to avoid.
+    setToken(null);
+    setLoadingToken(true);
+
+    void getCollectionShareTokenAction(collectionId)
+      .then((result) => {
+        if (result.error) setError(result.error);
+        else setToken(result.token);
+      })
+      .catch(() => {
+        // The action returns `{ error }` rather than throwing, so reaching here
+        // means the request itself never landed — offline, a 500, a stale
+        // deployment id. Without this the menu sits on "Loading link…" for good
+        // and the rejection is swallowed, because nothing awaits this promise.
+        setError("Could not load the share link.");
+      })
+      .finally(() => setLoadingToken(false));
+  }
 
   function share() {
     setError(null);
     startTransition(async () => {
       const result = await shareCollectionAction(collectionId);
       if (result.error) setError(result.error);
+      // The action already returns the new token, so the link can be shown without
+      // a second round trip for the value that was just created.
+      else setToken(result.token);
     });
   }
 
@@ -66,6 +124,7 @@ export function ShareCollection({
     startTransition(async () => {
       const result = await unshareCollectionAction(collectionId);
       if (result.error) setError(result.error);
+      else setToken(null);
     });
   }
 
@@ -84,7 +143,7 @@ export function ShareCollection({
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -94,7 +153,7 @@ export function ShareCollection({
             "row-control",
             // A shared collection keeps its control visible: it is the only marker
             // that the collection is readable by anyone with the link.
-            shareToken && "row-control-always text-primary",
+            isShared && "row-control-always text-primary",
           )}
         >
           <Share2 size={14} aria-hidden />
@@ -102,16 +161,21 @@ export function ShareCollection({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-72">
-        {shareToken ? (
+        {isShared ? (
           <>
             <div className="px-2 py-1.5">
               <p className="text-xs font-semibold">Anyone with this link</p>
               <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                {url ?? "…"}
+                {loadingToken ? "Loading link…" : (url ?? "…")}
               </p>
             </div>
 
             <DropdownMenuItem
+              // Disabled until the token has arrived: it used to come in as a prop
+              // and was always there, so without this the item looks live during
+              // the fetch and silently copies nothing. `loadingToken` is checked
+              // too, so a refetch cannot copy the token it is replacing.
+              disabled={!url || loadingToken}
               // Keeps the menu open, so the copied confirmation is visible.
               onSelect={(event) => {
                 event.preventDefault();

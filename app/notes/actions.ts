@@ -14,6 +14,7 @@ import {
   deleteNote,
   deleteNoteImage,
   deleteTag,
+  getCollectionShareToken,
   recordSearch,
   removeSearchHistoryEntry,
   removeTagFromNote,
@@ -281,6 +282,29 @@ export async function searchNotesAction(
     return { error: null, notes: await searchNotes(query) };
   } catch (cause) {
     return { ...failure(cause, "Could not search notes."), notes: null };
+  }
+}
+
+/**
+ * The share token for one collection, read when the share menu opens.
+ *
+ * The list the sidebar renders carries only `is_shared`, so the token has to be
+ * asked for separately — see the `Collection` type in lib/db for why. Returns null
+ * for a collection that is private, gone, or not the caller's: those are one answer
+ * from here, and the menu has nothing different to show for any of them.
+ */
+export async function getCollectionShareTokenAction(
+  id: string,
+): Promise<{ error: string | null; token: string | null }> {
+  await requireUser();
+
+  try {
+    return { error: null, token: await getCollectionShareToken(id) };
+  } catch (cause) {
+    return {
+      ...failure(cause, "Could not load the share link."),
+      token: null,
+    };
   }
 }
 

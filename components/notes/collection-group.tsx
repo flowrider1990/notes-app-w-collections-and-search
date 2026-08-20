@@ -30,11 +30,12 @@ type CollectionGroupProps = {
    */
   collectionId?: string;
   /**
-   * The collection's share token, or null when private. Only meaningful alongside
+   * Whether this collection has a share link. Only meaningful alongside
    * `collectionId` — the Uncollected and Archive sections are views, not rows, and
-   * cannot be shared.
+   * cannot be shared. The token itself is not passed down; `ShareCollection` reads
+   * it when its menu opens.
    */
-  shareToken?: string | null;
+  isShared?: boolean;
   /**
    * Whether a dragged note can be dropped here to join this collection. The
    * "Archive" section reuses this component and must set it false: it has no
@@ -75,7 +76,7 @@ export function CollectionGroup({
   totalCount,
   emptyMessage,
   collectionId,
-  shareToken = null,
+  isShared = false,
   droppable = true,
   defaultExpanded = false,
   forceExpanded = false,
@@ -282,7 +283,7 @@ export function CollectionGroup({
             <ShareCollection
               collectionId={collectionId}
               name={name}
-              shareToken={shareToken}
+              isShared={isShared}
             />
           </>
         ) : null}

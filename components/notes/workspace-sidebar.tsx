@@ -372,7 +372,7 @@ export function WorkspaceSidebar({
                 <CollectionGroup
                   key={collection.id}
                   collectionId={collection.id}
-                  shareToken={collection.share_token}
+                  isShared={collection.is_shared}
                   name={collection.name}
                   notes={inCollection}
                   totalCount={totalInCollection}

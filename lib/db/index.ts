@@ -33,13 +33,49 @@ export type Tag = {
   color: string;
 };
 
+/**
+ * A collection as the workspace lists it.
+ *
+ * `is_shared` rather than the token itself. The sidebar renders one of these per
+ * collection, and every prop a client component holds is serialised into the
+ * payload the browser receives — so carrying `share_token` here put a bearer
+ * capability, the one thing that grants anonymous read of the collection, into
+ * every `/notes` response, for every collection, whether or not its share menu was
+ * ever opened. RLS never let a stranger read it, but the owner's own tokens had no
+ * reason to be there. The list only needs to know *whether* a link exists;
+ * `getCollectionShareToken` fetches the token when the menu is actually open.
+ */
 export type Collection = {
   id: string;
   name: string;
-  /** Null when private. Non-null makes the collection readable by link. */
+  /** Whether a share link exists. The token itself is fetched on demand. */
+  is_shared: boolean;
+  created_at: string;
+};
+
+/** The `collections` columns as Postgres returns them, before the projection below. */
+type CollectionRow = {
+  id: string;
+  name: string;
   share_token: string | null;
   created_at: string;
 };
+
+/**
+ * Projects a collection row to what a client component may hold.
+ *
+ * Mirrors `toNoteListItem`: the point of this function is the boundary, not the
+ * bytes off the wire. `share_token` is still selected, because `is_shared` is
+ * derived from it and PostgREST cannot compute the boolean — it just stops here.
+ */
+function toCollection({
+  id,
+  name,
+  share_token,
+  created_at,
+}: CollectionRow): Collection {
+  return { id, name, is_shared: share_token !== null, created_at };
+}
 
 /** A shared collection as an anonymous visitor sees it: a name and bare notes. */
 export type SharedCollection = {
@@ -120,9 +156,15 @@ export type NoteListItem = Pick<
 const NOTE_COLUMNS =
   "id, collection_id, title, body, pinned, archived, created_at, updated_at, note_tags(tags(id, name, color))";
 
+// The row shape, not the DTO: `share_token` is read so `toCollection` can derive
+// `is_shared` from it, and is dropped there rather than sent to the client.
 const COLLECTION_COLUMNS = "id, name, share_token, created_at";
 
-/** Guards the one query whose argument comes from a URL rather than from a row. */
+/**
+ * Guards the queries whose uuid argument does not come from a row we just read:
+ * the share token out of a URL, and the collection id a client component asks
+ * about. `.eq` on a uuid column raises 42P02 on anything malformed.
+ */
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -336,7 +378,7 @@ export async function getCollections(): Promise<Collection[]> {
     throw new Error(`Could not load collections: ${error.message}`);
   }
 
-  return (data ?? []) as Collection[];
+  return ((data ?? []) as CollectionRow[]).map(toCollection);
 }
 
 export async function getTags(): Promise<Tag[]> {
@@ -372,7 +414,7 @@ export async function createCollection(name: string): Promise<Collection> {
     throw new Error(`Could not create collection "${name}": ${error.message}`);
   }
 
-  return data as Collection;
+  return toCollection(data as CollectionRow);
 }
 
 /**
@@ -889,6 +931,42 @@ export async function deleteTag(id: string): Promise<void> {
   }
 
   assertWriteHit(data, "delete that tag");
+}
+
+/**
+ * The share token for one collection, or null when it is private.
+ *
+ * Split out of `getCollections` so the token travels only when the share menu is
+ * actually open — see the `Collection` type for why the list carries a boolean
+ * instead. RLS scopes the select, so an id belonging to someone else finds no row
+ * and returns null, which is the same answer a private collection gives: the menu
+ * shows the same thing either way, and there is nothing here to distinguish for a
+ * caller who should not have asked.
+ *
+ * No `assertWriteHit` — this is a read, and finding nothing is an answer rather
+ * than a write that silently matched no rows.
+ */
+export async function getCollectionShareToken(
+  id: string,
+): Promise<string | null> {
+  // `.eq` on a uuid column raises 42P02 on a malformed value, which would surface
+  // as a failure rather than as "no such collection". The id reaches here from a
+  // client component, so it is checked the same way the share token is.
+  if (!UUID_PATTERN.test(id)) return null;
+
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("collections")
+    .select("share_token")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Could not load the share link: ${error.message}`);
+  }
+
+  return data?.share_token ?? null;
 }
 
 /**
