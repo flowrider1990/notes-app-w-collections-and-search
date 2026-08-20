@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createClient } from "@/lib/supabase/server";
 import { toTsQuery } from "@/lib/search-query";
 import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
@@ -13,6 +15,15 @@ import { pickTagColor, TAG_COLORS, type TagColor } from "@/lib/tag-colors";
  *
  * RLS scopes every table to `user_id = auth.uid()`, so none of these queries
  * filter by user — the database does it, and no filter here could be safer.
+ *
+ * `import "server-only"` is the boundary that keeps it that way. The nine
+ * client components that import the types below all use `import type`, which
+ * erases at compile time, so the marker costs them nothing. What it buys is the
+ * error message: a mistaken *value* import was already refused, because this
+ * module transitively reaches `next/headers`, but that failure is reported as
+ * "you are using it in the Pages Router" — true of nothing here. The marker
+ * makes the build say `'server-only' cannot be imported from a Client
+ * Component module` instead.
  */
 
 export type Tag = {
