@@ -1,0 +1,63 @@
+-- Stop stamping TRUNCATE onto new tables for `authenticated`.
+--
+-- 20260820164046_revoke_authenticated_truncate.sql took TRUNCATE back from the six tables that
+-- exist and named this as the work it left open. This is that follow-up, and it closes the gap
+-- properly: after it, a table created later in `public` arrives without TRUNCATE for
+-- `authenticated`, so the fix no longer depends on someone remembering to add a line.
+--
+-- Why TRUNCATE and nothing else, restated because this is the file a future reader will find
+-- first: RLS is evaluated per row, and TRUNCATE removes rows without visiting them, so no policy
+-- can constrain it. For that one command the grant is the whole control. The four DML commands
+-- are a different case entirely -- every one of them is filtered by the owner-scoped policies in
+-- docs/schema.sql section 4, which is why `authenticated` keeps its defaults for them.
+--
+-- This corrects a specific sentence in 20260820154942_close_public_default_privileges.sql, which
+-- kept `authenticated`'s table defaults whole on the grounds that "every table in this project is
+-- meant to be reachable by a signed-in user and gated by RLS -- that is the whole design". True of
+-- SELECT, INSERT, UPDATE and DELETE. Not true of TRUNCATE, and TRUNCATE was inside the set that
+-- reasoning kept.
+--
+-- Read live before this file was written:
+--
+--     pg_default_acl, schema public, objtype 'r', granted by postgres:
+--       {postgres=arwdDxtm/postgres, authenticated=arwdDxtm/postgres, service_role=arwdDxtm/postgres}
+--
+-- The `D` in the `authenticated` entry is what this removes, leaving `arwdxtm`. `anon` is already
+-- absent from that row -- 20260820154942 revoked it -- and is not named here.
+--
+-- What this changes: nothing that exists today.
+--
+-- ALTER DEFAULT PRIVILEGES is prospective only. It rewrites the template consulted at CREATE time
+-- and never touches an object already created, so the six tables keep exactly the ACLs the
+-- previous migration left them with (`authenticated=arwdxtm/postgres`, already correct). No RLS
+-- policy is created, dropped or altered, no table grant is touched, and nothing here reaches
+-- `storage` -- not its buckets, not its object policies.
+--
+-- Scope, deliberately: role `postgres` only, object type `tables` only.
+--
+--   * `postgres` is the role `supabase db push` connects as and therefore the role that creates
+--     everything this project owns, so its row is the one that governs future tables here. The
+--     `supabase_admin` row still carries the full grant, and still cannot be altered from a hosted
+--     migration -- 20260820154942 documents that limitation at length and it is unchanged. It
+--     governs objects created BY `supabase_admin` (extensions, Supabase-managed schema), none of
+--     which belong to this repository.
+--
+--     Note the deliberate asymmetry with that file: it writes its `supabase_admin` half out under
+--     a pre-check so it is complete on a database where the running role does hold ADMIN OPTION.
+--     This one omits it even there. Closing `anon` on that row was worth the guarded block --
+--     `anon` is unauthenticated and holds no policy anywhere. TRUNCATE for `authenticated` on
+--     Supabase-managed and extension-created tables is not this project's call to make, and
+--     revoking it could break tooling that owns those objects.
+--   * Sequences are left alone. The sequence defaults grant `rwU` -- read, write, usage -- and
+--     carry no TRUNCATE to revoke, so they are not part of this finding.
+--   * `service_role` keeps everything: trusted server-side key, never exposed to a browser
+--     (CLAUDE.md rule 5).
+--
+-- Deliberately unguarded, matching Part 1 of 20260820154942: no existence check, no exception
+-- handler, no dynamic SQL. If it fails, the migration aborts and the failure is visible rather
+-- than leaving the template open while the history claims otherwise.
+--
+-- Idempotent: revoking a default privilege that is not in the template is a no-op.
+
+alter default privileges for role postgres in schema public
+  revoke truncate on tables from authenticated;

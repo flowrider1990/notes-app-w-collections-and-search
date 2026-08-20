@@ -689,10 +689,9 @@ create policy note_images_delete on public.note_images
 -- supabase/migrations/20260820164046_revoke_authenticated_truncate.sql (authenticated).
 --
 -- This covers the tables that exist. The template new tables are stamped from is a separate
--- thing, and it is closed in section 9 — a table added after that arrives without the `anon`
--- grant, so it no longer has to be added to this list by hand. The `authenticated` half is not
--- symmetrical: section 9 deliberately leaves that role its table defaults, so a seventh table
--- arrives with TRUNCATE and needs a line adding to the second list below.
+-- thing, and section 9 closes both halves of it — a table added after that arrives with nothing
+-- for `anon` and without TRUNCATE for `authenticated`. Neither list below needs a line adding by
+-- hand when a seventh table appears.
 
 revoke all privileges on table public.collections    from anon;
 revoke all privileges on table public.note_images    from anon;
@@ -729,13 +728,20 @@ revoke truncate on table public.tags           from authenticated;
 -- this file exists only because of it.
 --
 -- After this, a new function is callable only once someone writes an explicit `grant execute`,
--- and a new table arrives with nothing for `anon`. `authenticated` keeps its table defaults:
--- every table here is meant to be reachable by a signed-in user and gated by RLS. `service_role`
--- keeps everything — it is the trusted server-side key and never reaches a browser.
+-- and a new table arrives with nothing for `anon`. `authenticated` keeps its table defaults
+-- except TRUNCATE: every table here is meant to be reachable by a signed-in user and gated by
+-- RLS, which is true of SELECT, INSERT, UPDATE and DELETE and is exactly what is not true of
+-- TRUNCATE — policies are evaluated per row and TRUNCATE never visits one, so section 8's
+-- argument applies to the template as well as to the six tables it already fixed. Without this
+-- the seventh table would arrive with TRUNCATE restored. `service_role` keeps everything — it is
+-- the trusted server-side key and never reaches a browser.
 --
 -- ALTER DEFAULT PRIVILEGES is prospective only. No existing ACL changes, so
 -- `shared_collection` stays executable by `anon`, `rls_auto_enable` stays not, and the six
--- tables keep every `authenticated` grant. No RLS policy and nothing in `storage` is touched.
+-- tables keep the grants section 8 left them with. No RLS policy and nothing in `storage` is
+-- touched. Sequences are left alone throughout: their defaults carry no TRUNCATE to revoke, so
+-- they are out of scope here — not assessed and cleared. That row still reads
+-- `{postgres=rwU, anon=rwU, authenticated=rwU, service_role=rwU}`.
 --
 -- A default ACL is keyed to the role that CREATES the object, and the two granting roles are
 -- therefore not equally important here.
@@ -753,13 +759,19 @@ revoke truncate on table public.tags           from authenticated;
 -- `insufficient_privilege` and nothing else — a syntax error or any other failure propagates
 -- and aborts, the same as the `postgres` half.
 --
--- Applied by supabase/migrations/20260820154942_close_public_default_privileges.sql. The
--- effective statements, the first two unconditional and the second two conditional:
+-- Applied by supabase/migrations/20260820154942_close_public_default_privileges.sql, and the
+-- TRUNCATE line by supabase/migrations/20260820164907_revoke_authenticated_truncate_default.sql.
+-- The effective statements — the `postgres` ones unconditional, the `supabase_admin` ones
+-- conditional. They are commented out because this section cannot be applied by running this
+-- file: the `supabase_admin` pair needs the guarded block those migrations carry, and a run that
+-- silently skipped it would be worse than no run. Apply section 9 with `supabase db push`, not by
+-- pasting this file into the SQL editor.
 
--- alter default privileges for role postgres       in schema public revoke execute on functions from anon, authenticated;
--- alter default privileges for role postgres       in schema public revoke all     on tables    from anon;
--- alter default privileges for role supabase_admin in schema public revoke execute on functions from anon, authenticated;
--- alter default privileges for role supabase_admin in schema public revoke all     on tables    from anon;
+-- alter default privileges for role postgres       in schema public revoke execute  on functions from anon, authenticated;
+-- alter default privileges for role postgres       in schema public revoke all      on tables    from anon;
+-- alter default privileges for role postgres       in schema public revoke truncate on tables    from authenticated;
+-- alter default privileges for role supabase_admin in schema public revoke execute  on functions from anon, authenticated;
+-- alter default privileges for role supabase_admin in schema public revoke all      on tables    from anon;
 
 -- ============================================================
 -- 10. Verification
@@ -810,9 +822,10 @@ revoke truncate on table public.tags           from authenticated;
 -- select has_schema_privilege('anon', 'public', 'usage')      as schema_usage,
 --        has_function_privilege('anon', 'public.shared_collection(uuid)', 'execute') as fn_execute;
 
--- Section 9. The `postgres` rows must show no `anon=` entry at all, and no
--- `authenticated=X` on the function row. A `supabase_admin` row still carrying them is the
--- documented skip, not a regression — application objects are not created by that role.
+-- Section 9. The `postgres` rows must show no `anon=` entry at all, no `authenticated=X` on
+-- the function row, and `authenticated=arwdxtm` — no `D` — on the table row. A `supabase_admin`
+-- row still carrying them is the documented skip, not a regression — application objects are
+-- not created by that role.
 -- select pg_get_userbyid(d.defaclrole) as granting_role,
 --        case d.defaclobjtype when 'r' then 'table' when 'f' then 'function'
 --             else d.defaclobjtype::text end as objtype,
