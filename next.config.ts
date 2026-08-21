@@ -66,6 +66,37 @@ const contentSecurityPolicy = [
   ...(isDev ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");
 
+/**
+ * The cache policy for a page that renders one signed-in user's own data.
+ *
+ * Production served `/notes` to a signed-in visitor as `public, max-age=0,
+ * must-revalidate` with `X-Vercel-Cache: HIT` and no `Vary: Cookie`. That HIT is the
+ * PPR shell, which was checked and holds no user data — the notes themselves are
+ * resumed per request — so it was not a cross-user leak. But `public` is the wrong
+ * word for a response whose body is one person's notes, and `max-age=0,
+ * must-revalidate` only obliges a *compliant* shared cache to revalidate. `no-store`
+ * removes the question instead of arguing it, and `private` says the same thing to
+ * anything that ignores `no-store`.
+ *
+ * This is a response header, not a rendering directive, so the build still marks these
+ * routes partially prerendered. Whether Vercel *also* keeps serving the shell from its
+ * edge cache is an expectation, not a verified fact: the local check ran against
+ * `next start`, which has no shared cache, and a `Cache-Control` from `headers()` is
+ * applied at the routing layer, where it may suppress the `X-Vercel-Cache: HIT` that
+ * production showed. If it does, the cost is a slower first byte, not a leak. Confirm
+ * it in the same authenticated pass that checks the header — see section 5 of
+ * `docs/post-deploy-security-check-2026-08-21.md`.
+ *
+ * One user-visible consequence: `no-store` disables the back/forward cache in Firefox
+ * and Safari, so returning to the workspace from an external page now refetches it
+ * instead of restoring it. `private` alone would have fixed the labelling without that,
+ * but it leaves a response that a cache is still permitted to store.
+ */
+const privateCacheControl = {
+  key: "Cache-Control",
+  value: "private, no-store",
+};
+
 const nextConfig: NextConfig = {
   cacheComponents: true,
 
@@ -80,10 +111,14 @@ const nextConfig: NextConfig = {
   },
 
   /**
-   * Response headers that apply to every route. The `*` modifier makes the parameter
+   * Response headers. The first rule applies to every route; the two after it add a
+   * cache policy to the signed-in pages only. The `*` modifier makes the parameter
    * zero-or-more, so `/:path*` matches the top-level `/` as well as everything under
    * it — the built regex in `.next/routes-manifest.json` is the place to confirm that
-   * if this pattern is ever changed.
+   * if either pattern is ever changed.
+   *
+   * Rules are additive and these two sets share no key, so a signed-in page gets the
+   * three security headers *and* the cache policy.
    */
   headers() {
     return [
@@ -105,6 +140,17 @@ const nextConfig: NextConfig = {
           { key: "Content-Security-Policy", value: contentSecurityPolicy },
         ],
       },
+      // The workspace: every page under it is gated by `requireUser()` and shows the
+      // signed-in user's own notes. `/notes/:path*` covers `/notes` itself for the
+      // same zero-or-more reason as above.
+      { source: "/notes/:path*", headers: [privateCacheControl] },
+      // The one auth page that requires a session. The rest of `/auth/**` are signed-out
+      // forms with nothing personal on them, and `/` and `/share/[token]` are public by
+      // design — `/share/[token]` is left on Next's default, since serving one shared
+      // collection to many strangers is the whole feature. `/auth/callback` and
+      // `/auth/confirm` are left alone too: they render dynamically and answer with
+      // `Set-Cookie`, so nothing caches them either way.
+      { source: "/auth/update-password", headers: [privateCacheControl] },
     ];
   },
 
