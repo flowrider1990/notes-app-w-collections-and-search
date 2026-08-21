@@ -23,16 +23,27 @@ The base branch is `$1` if one was given, otherwise `main`.
 ```bash
 git rev-parse --show-toplevel
 git branch --show-current
-git fetch --quiet origin
-git merge-base HEAD <base>            # the fork point — not the base tip
-git diff --name-only $(git merge-base HEAD <base>)...HEAD
-git diff --name-only HEAD             # uncommitted tracked edits
-git status --porcelain=v1 | grep '^??' # untracked files
+git fetch --quiet origin                        # moves origin/<base>, not the local ref
+git merge-base HEAD origin/<base>               # the fork point — not the base tip
+git diff --name-only $(git merge-base HEAD origin/<base>)...HEAD
+git diff --name-only HEAD                       # uncommitted tracked edits
+git status --porcelain=v1 --untracked-files=all  # untracked files, one line each
 ```
 
 Use the **merge base**, not the base branch tip. A two-dot `git diff main..HEAD` also lists commits
 that landed on `main` after this branch started, which pads the scan with other people's work and
 buries the findings that are actually yours.
+
+Two details in those commands are easy to get wrong:
+
+- **Compare against `origin/<base>`, not the local one.** `git fetch` updates the remote-tracking
+  ref and leaves the local branch where it was, so a merge base computed against a stale local
+  `main` can silently include work that is already merged. Fall back to the local ref when there is
+  no remote — that is the offline case, and it should degrade rather than fail.
+- **`--untracked-files=all`.** The default collapses a newly added directory into a single
+  `?? dir/` line, and step 3 needs real paths to hand to the agents. Read the `??` entries out of
+  that output yourself rather than piping into `grep`: the pipeline leaves `Bash(git:*)` territory
+  and turns an unattended step into a permission prompt.
 
 The scope is the union of three sets: committed changes since the fork point, uncommitted edits to
 tracked files, and untracked files. All three are part of what this branch is proposing, and a
@@ -48,9 +59,15 @@ finding in an uncommitted file is recognisable as one you can fix without a new 
 - **The base does not exist locally.** Try `origin/<base>`. If neither resolves, stop and say which
   names you tried rather than guessing at `master` or `develop`.
 - **Detached HEAD.** The diff still works; say so, since "this branch" has no name to report.
-- **Only lockfiles, images or docs changed.** Say that plainly and skip the dispatch. Three agents
-  reading a `package-lock.json` diff produce noise, not findings. A dependency *bump* is a real
-  security question, but it is a different one — dependency auditing, not code scanning.
+- **Nothing in the diff has a security surface.** Say that plainly and skip the dispatch. Three
+  agents reading a `package-lock.json` diff produce noise, not findings. Judge this by path, not by
+  the category "docs", and check the exclusion against the table in step 2 before applying it:
+  lockfiles, images, `README.md`, `CHANGELOG.md` and prose under `docs/` qualify; `docs/schema.sql`
+  emphatically does not, because `CLAUDE.md` sanctions a schema change landing *only* there when the
+  Supabase CLI is unavailable, so "only docs changed" would skip the single highest-value diff this
+  command can be handed. `.claude/` prompt and agent definitions qualify too — they change how a
+  scan behaves, never what the deployed app serves. A dependency *bump* is a real security question,
+  but a different one: dependency auditing, not code scanning.
 
 ## 2. Decide which scanners have something to look at
 
@@ -67,11 +84,18 @@ Rough map of the layers, as a starting point rather than a rule — read the dif
 | `nextjs-security-scanner` | `app/**` pages, layouts, `actions.ts`, route handlers, `middleware.ts`/proxy, Server/Client component boundaries, `NEXT_PUBLIC_` usage, what gets passed into a client component |
 | `vercel-security-scanner` | `next.config.ts` headers, `vercel.json`, `.gitignore`, `.env*`, environment-variable reads, and anything that changes what a response carries or who can reach a deployment |
 
-The Vercel scanner deserves a note, because its subject is mostly *configuration rather than files*.
-Scope it to the deployment surface the diff actually moves — a changed header, a new env var, an
-altered ignore rule, a secret that appears in the diff. Do not let it drift into auditing account
-settings that this branch never touched; if the diff moves none of that surface, its correct answer
-is a single line saying so.
+The Vercel scanner deserves a note, because most of its subject is *configuration rather than files*
+and therefore does not decompose into a diff at all. Only one of its checks genuinely does: the
+headers a project configures and serves, in `next.config.ts` and `vercel.json`. Environment-variable
+scoping, Deployment Protection on preview URLs and the git-history secret sweep are properties of
+the account and of the whole history, not of these commits — they belong to a full audit, and asking
+for them here yields either a full audit or a shrug.
+
+So scope this one deliberately: the header and config surface the diff moves, plus any secret or
+env-var reference the diff itself introduces. Tell it that its remaining checks are **out of scope
+for this run** rather than leaving it to infer that from silence, and have it name them as not run,
+so nobody reads a quiet report as an audited deployment. If the diff moves none of that surface,
+one line saying so is its correct answer.
 
 ## 3. Dispatch all three, in one message
 
@@ -98,6 +122,18 @@ Give each agent the same three things:
    > mention it in one line as context only if it changes how a real finding should be read, and
    > otherwise leave it. If nothing in the listed files touches your layer, say exactly that in one
    > line instead of widening the scan.
+   >
+   > Where your own checklist contains a check that cannot be narrowed to a diff — a live account
+   > setting, a whole-history sweep, an enumeration of every table or every `"use server"` file —
+   > this scoping governs what you *report*, not which checks you are allowed to run. Run what you
+   > judge necessary, then report only what this diff introduced or affected, and list the checks you
+   > deliberately did not narrow as not covered by this run.
+
+   That last paragraph exists because each of these agents carries its own whole-project checklist
+   and is told to work through all of it. A calling prompt cannot overrule that, and pretending
+   otherwise makes each run resolve the conflict differently — sometimes the full audit this command
+   is trying to avoid, sometimes an agent quietly skipping its own checks. Naming the tension and
+   putting it on the reporting side is what makes the outcome predictable.
 
    "Affected by" is the part worth being careful about, and it is why the instruction is not "the
    changed line must be the cause". A diff can make unchanged code newly dangerous without touching
@@ -114,7 +150,9 @@ rewriting that in the prompt only makes them less consistent with their standalo
 
 One report, not three pasted together. The point of running them together is the combined picture.
 
-1. **Verdict** — one line: clean, or N findings by severity across all three.
+1. **Verdict** — one line: N findings by severity across all three, and how many checks came back
+   unverifiable. "Clean" is only honest when the layers were actually reachable; otherwise the
+   verdict says clean *so far as it could be checked* and points at item 4.
 2. **Scope** — base ref, head sha, branch name, and the file count with the three categories. A
    reader has to be able to tell what was *not* looked at.
 3. **Findings**, worst first, merged across scanners. Each: `file:line`, which scanner raised it,
@@ -124,8 +162,15 @@ One report, not three pasted together. The point of running them together is the
    two scanners flag the same line
    from different angles, merge them into one finding and keep both angles — that overlap is usually
    the strongest signal in the report, not a duplicate to be tidied away.
-4. **Layers with nothing to report** — one line each. Silence from a scanner and a clean result from
-   it are different outcomes, and the difference matters when you are deciding whether to merge.
+4. **Could not be verified** — every check that came back inconclusive or was left out of scope,
+   one line each, naming what would settle it. This section is not optional padding, and it is not
+   the same as item 5. In this repo it is the *normal* case for the deployment layer: the checkout is
+   deliberately unlinked, so an unauthenticated CLI turns most live Vercel checks into "unknown".
+   A run where nothing about the deployment could be checked must not print the verdict "clean" —
+   that is precisely the half-working report this command exists to avoid.
+5. **Layers with nothing to report** — one line each. Silence from a scanner, a clean result from it,
+   and a result it could not obtain are three different outcomes, and the difference is what you are
+   actually deciding on when you decide whether to merge.
 
 Do not invent findings to make the run look worthwhile; a clean diff is a good outcome, stated in a
 line. Do not soften a real one either, and do not defer to the fact that this repo has been audited
