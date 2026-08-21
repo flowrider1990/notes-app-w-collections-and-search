@@ -104,6 +104,20 @@ This file previously said there was no deployment step and no public URL. That w
 stopped being true, which is worse than saying nothing: it tells a reader that a whole category of
 risk does not apply here.
 
+**Production is deployed by hand; previews are not.** `vercel.json` sets
+`git.deploymentEnabled` to `{"main": false}` — an object keyed by branch, so every *other* branch
+still auto-deploys a preview on push and only `main` has been made silent. That is the workflow:
+push the feature or submission branch, check the preview and run the security scan on it, merge,
+and then promote deliberately with `npx vercel --prod`. Note what the CLI actually deploys — the
+files on disk, not the commit on GitHub — so a production deploy means `git checkout main && git
+pull` first, or you ship whatever branch you happen to be standing on. Vercel reads the flag out of
+`vercel.json` in the pushed commit, so it has to be on `main` itself to stop `main` from building.
+The consequence for anyone reading `next.config.ts` is the one already noted above, only sharper —
+the production alias now drifts from `main` until someone deploys on purpose.
+This checkout is deliberately not linked — there is no `.vercel/`, and `git check-ignore` keeps it
+that way — so the command carries its own target:
+`npx vercel --prod --yes --project notes-app-w-collections-and-search --scope fei-cdc2`.
+
 **One Supabase project serves this app, and Production, Preview and local development all use it.**
 Each of the two Vercel variables is a single entry carrying a single value, so Production and
 Preview cannot hold different ones; `.env.local` names that same project again. This is a decision,
