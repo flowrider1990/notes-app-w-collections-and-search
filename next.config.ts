@@ -78,10 +78,19 @@ const contentSecurityPolicy = [
  * removes the question instead of arguing it, and `private` says the same thing to
  * anything that ignores `no-store`.
  *
- * This is a response header, not a rendering directive: Vercel decides what to keep
- * in its own cache from the prerender manifest, so the shell is still served from the
- * edge and PPR is unaffected. What changes is what every cache downstream of it is
- * allowed to do.
+ * This is a response header, not a rendering directive, so the build still marks these
+ * routes partially prerendered. Whether Vercel *also* keeps serving the shell from its
+ * edge cache is an expectation, not a verified fact: the local check ran against
+ * `next start`, which has no shared cache, and a `Cache-Control` from `headers()` is
+ * applied at the routing layer, where it may suppress the `X-Vercel-Cache: HIT` that
+ * production showed. If it does, the cost is a slower first byte, not a leak. Confirm
+ * it in the same authenticated pass that checks the header — see section 5 of
+ * `docs/post-deploy-security-check-2026-08-21.md`.
+ *
+ * One user-visible consequence: `no-store` disables the back/forward cache in Firefox
+ * and Safari, so returning to the workspace from an external page now refetches it
+ * instead of restoring it. `private` alone would have fixed the labelling without that,
+ * but it leaves a response that a cache is still permitted to store.
  */
 const privateCacheControl = {
   key: "Cache-Control",
@@ -137,8 +146,10 @@ const nextConfig: NextConfig = {
       { source: "/notes/:path*", headers: [privateCacheControl] },
       // The one auth page that requires a session. The rest of `/auth/**` are signed-out
       // forms with nothing personal on them, and `/` and `/share/[token]` are public by
-      // design — `/share/[token]` deliberately keeps its cacheable policy, since serving
-      // one shared collection to many strangers is the whole feature.
+      // design — `/share/[token]` is left on Next's default, since serving one shared
+      // collection to many strangers is the whole feature. `/auth/callback` and
+      // `/auth/confirm` are left alone too: they render dynamically and answer with
+      // `Set-Cookie`, so nothing caches them either way.
       { source: "/auth/update-password", headers: [privateCacheControl] },
     ];
   },

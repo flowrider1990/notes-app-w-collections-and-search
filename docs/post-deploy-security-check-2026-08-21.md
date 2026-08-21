@@ -11,9 +11,15 @@ by hand, turned out to be a Low finding, and was fixed by two `headers()` rules 
 
 This was a gap analysis against the two tutorial security requirements, not a fresh
 audit. It reused [`auth-scan.md`](auth-scan.md) (18 August 2026, commit `1b5836f`) and
-[`audit-2026-08-19.md`](audit-2026-08-19.md) as the baseline and re-checked only what
-those do not conclusively cover at `HEAD` — the auth scan is 34 commits stale, so its
-structural claims were re-run rather than trusted. All of its findings still hold.
+`audit-2026-08-19.md` as the baseline and re-checked only what those do not conclusively
+cover at `HEAD`. The auth scan predates a long run of security commits, so its structural
+claims were re-run rather than trusted; all of its findings still hold.
+
+`audit-2026-08-19.md` is **not committed** — it exists only in the working tree, so it is
+deliberately not linked here. What it contributed: a list of already-triaged issues (an
+open-redirect guard since fixed, dependency pinning, duplicate auth-route code, and two
+structural items recorded as deliberately deferred), which kept this check from
+rediscovering them. Commit that file if the reference should resolve.
 
 Specifically covered:
 
@@ -27,7 +33,9 @@ Specifically covered:
 
 ### 1. Mutation authorization
 
-- **23** mutation actions in [`app/notes/actions.ts`](../app/notes/actions.ts) checked.
+- All **23** exported Server Actions in [`app/notes/actions.ts`](../app/notes/actions.ts)
+  checked. Twenty-one mutate; `searchNotesAction` and `getCollectionShareTokenAction` are
+  reads, and are gated the same way.
 - All 23 call `requireUser()` **before** the `try`, so the redirect is never swallowed
   into an `{ error }` result.
 - Ownership for the affected record is enforced through RLS: every owner-scoped table
@@ -153,12 +161,23 @@ routes only:
 | `/auth/update-password` | that page only |
 
 Public routes are untouched: `/` and the signed-out auth pages keep `s-maxage=31536000`,
-and `/share/[token]` keeps its own policy — serving one shared collection to many
-strangers is the whole feature. The CSP, `X-Frame-Options` and `X-Content-Type-Options`
-rule is unchanged and still applies to every route, and PPR is preserved — the build
-still marks `/notes`, `/notes/[id]`, `/auth/update-password` and `/share/[token]` as
-`◐ Partial Prerender`. The header is a response header; Vercel decides what to keep in
-its own cache from the prerender manifest, so the shell is still served from the edge.
+and `/share/[token]` is left on Next's default — serving one shared collection to many
+strangers is the whole feature. `/auth/callback` and `/auth/confirm` are untouched as
+well — they render dynamically and answer with `Set-Cookie`, so nothing caches them
+either way. The CSP, `X-Frame-Options` and `X-Content-Type-Options` rule is unchanged and
+still applies to every route.
+
+PPR is preserved at build time: the build still marks `/notes`, `/notes/[id]`,
+`/auth/update-password` and `/share/[token]` as `◐ Partial Prerender`. Whether Vercel
+*also* keeps serving the shell from its edge cache is an **expectation, not a verified
+fact** — the local run used `next start`, which has no shared cache, and a
+`Cache-Control` from `headers()` is applied at the routing layer, where it may suppress
+the `X-Vercel-Cache: HIT` production showed. If it does, the cost is a slower first byte,
+not a leak. This is folded into the live check below.
+
+One user-visible consequence: `no-store` disables the back/forward cache in Firefox and
+Safari, so returning to the workspace from an external page refetches it rather than
+restoring it.
 
 Verified locally against `next start` on the production build — a single
 `Cache-Control: private, no-store` on all three private routes, no duplicate header,
@@ -171,8 +190,10 @@ Status: **Finding addressed in code — requires live verification after deploym
 **Live verification still required.** The fix is not deployed. Production is promoted by
 hand (`vercel.json` sets `git.deploymentEnabled` to `{"main": false}`), so the alias
 still serves the old header until someone runs `npx vercel --prod`. After deploying,
-repeat the authenticated request above and confirm `Cache-Control: private, no-store`
-on the 200. Until that is observed, this item stays open.
+repeat the authenticated request above and confirm two things on the 200: that
+`Cache-Control` reads `private, no-store`, and whether `X-Vercel-Cache` still reports
+`HIT` — the second settles the edge-caching expectation noted above. Until the header is
+observed, this item stays open.
 
 ## Open Low findings
 
